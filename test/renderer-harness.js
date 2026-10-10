@@ -31,7 +31,7 @@ function throwingStorage() {
 
 /**
  * Fresh window.Graph / window.PLErrorKinds / window.PLImageFormat / window.PLDisplayText / window.PLPathNames /
- * window.PLCloneUrl / window.Components / window.PLKeys / window.PLIcons /
+ * window.PLCloneUrl / window.PLSshText / window.Components / window.PLKeys / window.PLIcons /
  * window.PLOp / window.PLPolicy / window.PLHistory / window.PLRebase / window.PLImageCache / window.PLImage /
  * window.Store (module caches cleared; index.html order).
  */
@@ -39,13 +39,13 @@ function loadRenderer() {
   const files = ['components.js', 'keys.js', 'icons.js', 'op-model.js', 'policy.js', 'history-model.js', 'components/rebase-model.js',
     'image-cache.js', 'components/image-model.js', 'store.js'];
   const S = (f) => path.join(__dirname, '..', 'src', f);
-  const shared = ['error-kinds.js', 'image-format.js', 'display-text.js', 'path-names.js', 'clone-url.js'].map(S);
+  const shared = ['error-kinds.js', 'image-format.js', 'display-text.js', 'path-names.js', 'clone-url.js', 'ssh-text.js'].map(S);
   for (const f of [...shared, R('graph.js'), ...files.map(R)]) delete require.cache[require.resolve(f)];
   // index.html order: graph.js, ../src/error-kinds.js (window.PLErrorKinds), ../src/image-format.js
   // (window.PLImageFormat), ../src/display-text.js, ../src/path-names.js, ../src/clone-url.js
-  // (window.PLDisplayText, PLPathNames, PLCloneUrl), then components.js ...
-  const [PLErrorKinds, PLImageFormat, PLDisplayText, PLPathNames, PLCloneUrl] = shared.map((f) => require(f));
-  globalThis.window = { Graph: require(R('graph.js')), PLErrorKinds, PLImageFormat, PLDisplayText, PLPathNames, PLCloneUrl };
+  // (window.PLDisplayText, PLPathNames, PLCloneUrl), ../src/ssh-text.js (window.PLSshText), then components.js ...
+  const [PLErrorKinds, PLImageFormat, PLDisplayText, PLPathNames, PLCloneUrl, PLSshText] = shared.map((f) => require(f));
+  globalThis.window = { Graph: require(R('graph.js')), PLErrorKinds, PLImageFormat, PLDisplayText, PLPathNames, PLCloneUrl, PLSshText };
   globalThis.document = globalThis.document || { createElement: (tag) => ({ tagName: String(tag).toUpperCase() }) };
   for (const f of files) require(R(f));
   return globalThis.window;

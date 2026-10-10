@@ -24,7 +24,8 @@
 //
 // Files (index.html order; each adds its flows to window.PLFlows through window.PLFlowKit.register):
 //   flows-kit.js      the wrapper (flow, scoped, NO_DIALOG, settle), the kept-stash wording and
-//                     reportOutcome, authAlert, tagConflictsAlert, and the flows below
+//                     reportOutcome, the remote ops' connection failures (connectView, connectAlert),
+//                     tagConflictsAlert, and the flows below
 //   flows-sync.js     fetch, pull, pullMode / setPullMode / PULL_MODES, push, setUpstream
 //   flows-branch.js   checkout, createBranch, deleteBranch, deleteBranches, branchNameError
 //   flows-stash.js    stashSave, stashPop, stashApply, stashDrop
@@ -47,8 +48,9 @@
 //   shortcutFor(keydown, state, ctx), shortcutBlocked(keydown, state, ctx)   PLPolicy's (the global shortcuts)
 // Kit (window.PLFlowKit): C, flow, settle, report, dialog, dn, short, Op, status, currentBranch,
 // localBranches, upstreamOf, keptStashTitle, keptStashText, stashNote, reportOutcome, authAlert,
-// authMessage (also the clone dialog's, renderer/clone.js), tagConflictsAlert, register; flows-sync.js adds forcePush, flows-branch.js checkoutInner and
-// syntaxError, flows-op.js its start helpers.
+// authMessage and connectView (also the clone dialog's, renderer/clone.js), connectAlert, tagConflictsAlert,
+// register; flows-sync.js adds forcePush, flows-branch.js checkoutInner and syntaxError, flows-op.js its
+// start helpers.
 // All git-derived text reaches the DOM through the dialogs / toasts (textContent only).
 (function () {
   const C = window.Components;
@@ -223,7 +225,134 @@
     + `• HTTPS remotes: store your credentials with a credential helper (e.g. ${credentialHelperHint(platform)}) or sign in once from a terminal.\n`
     + '• SSH remotes: add your key to ssh-agent (ssh-add) and check that the remote accepts it.\n\nThen try again.';
 
-  const authAlert = (store, e) => dialog(store).alert({ title: 'Authentication failed', message: authMessage(), detail: e && e.message });
+  // ---------------------------------------------------------------- connection failures
+  // What a remote op (fetch, pull, push; clone's dialog too) says about a connection that failed
+  // (docs/plans/ssh-remote-errors.md §4.5): auth (an ssh remote's, ssh's "Too many authentication
+  // failures", an https one's), host-key (unknown, or changed: never "accept"), not-found and
+  // unreachable. `e.ssh` is main's ssh target of an ssh remote ({host, port, user, shownAs,
+  // changed, fingerprint}: shell-safe parts, src/remote.js sshTarget); the commands are shown,
+  // never run.
+
+  const SshText = () => window.PLSshText; // ../src/ssh-text.js, loaded before components.js
+  const CONNECT_KINDS = new Set(['auth', 'host-key', 'not-found', 'unreachable']);
+
+  // W6 gate (docs/plans/ssh-remote-errors.md §4.5 and §10 Q9): the Windows hint recommends Windows'
+  // own OpenSSH as core.sshCommand only once manual QA row W6 showed that it doesn't hang after a
+  // successful connection. Until then this stays false and the hint names the ssh-agent service
+  // and Pageant only; set it to true (and update the hint's test in test/flows.test.js) when W6 passes.
+  const RECOMMEND_WINDOWS_OPENSSH = false;
+  const WINDOWS_OPENSSH = ', and let git use Windows\' OpenSSH: git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe';
+
+  /** How to put a key into ssh-agent on `platform`, so ssh can use it without asking. */
+  function sshAgentHint(platform, { windowsOpenSsh = RECOMMEND_WINDOWS_OPENSSH } = {}) {
+    if (platform === 'darwin') {
+      return 'On macOS: ssh-add --apple-use-keychain ~/.ssh/<key>, and in ~/.ssh/config UseKeychain yes and AddKeysToAgent yes, so the key comes back after a restart.';
+    }
+    if (platform === 'win32') {
+      return 'Git for Windows\' own ssh doesn\'t use Windows\' ssh-agent service, which serves Windows\' OpenSSH. '
+        + 'The service is disabled by default; to use it, in an administrator PowerShell: '
+        + `Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent, then ssh-add${windowsOpenSsh ? WINDOWS_OPENSSH : ''}.\n\n`
+        + 'Or load the key in PuTTY\'s Pageant and set GIT_SSH to plink; restart Pasta Lite after setting GIT_SSH (it reads its environment when it starts).';
+    }
+    return 'Add it with ssh-add ~/.ssh/<key> in the session Pasta Lite was started from (it needs that session\'s SSH_AUTH_SOCK).';
+  }
+
+  /** The ASCII form of `host` (asciiHost: what ssh saves), or '' without one. */
+  const ascii = (host) => (host ? SshText().asciiHost(host) : '');
+
+  /** The host as a message names it: its ASCII form, said so when it differs; 'the server' without one. */
+  function hostText(host) {
+    if (!host) return 'the server';
+    return ascii(host) === host ? dn(host) : `${dn(ascii(host))} (the server's name in ASCII)`;
+  }
+
+  /** The `ssh -T` command for `ssh` ({host, port, user}); `ssh -T git@<host>` without a host. */
+  const sshCommandText = (ssh) => (ssh && ssh.host ? dn(SshText().sshCommand({ ...ssh, host: ascii(ssh.host) })) : 'ssh -T git@<host>');
+
+  /** `ssh-keygen -R` of the saved key: `'[host]:port'` with a port other than 22 (how ssh saves it). */
+  function keygenText(ssh) {
+    const host = ssh && ssh.host ? dn(ascii(ssh.host).replace(/^\[(.*)\]$/, '$1')) : '<host>';
+    return ssh && ssh.port && ssh.port !== 22 ? `ssh-keygen -R '[${host}]:${ssh.port}'` : `ssh-keygen -R ${host}`;
+  }
+
+  // git's own https prompt falls back to SSH_ASKPASS (Windows: Git for Windows' false.exe, src/ssh-env.js):
+  // its line is left in the error and dropped only where it is shown.
+  const ASKPASS_LINE = /^error: unable to read askpass response from .*(?:\r?\n|$)/gm;
+  const shownDetail = (text) => String(text || '').replace(ASKPASS_LINE, '').trim();
+  const firstLine = (text) => String(text || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
+
+  /** The {title, message} of connection failure `kind` (CONNECT_KINDS), or null. */
+  function connectText(kind, e, ssh, { op, platform }) {
+    const host = hostText(ssh && ssh.host);
+    switch (kind) {
+      case 'host-key':
+        if (ssh && ssh.changed) {
+          return {
+            title: 'The server\'s host key changed',
+            message: `${host} now presents a different key than the one saved for it. Someone may be intercepting the connection, or the server was reinstalled. `
+              + `Check the key${ssh.fingerprint ? ` (${dn(ssh.fingerprint)})` : ''} with the server's admin or its published fingerprints before you remove the saved one (${keygenText(ssh)}).`,
+          };
+        }
+        return { title: 'Unknown host key', message: `ssh doesn't know ${host} yet and can't ask here. Connect once from a terminal (${sshCommandText(ssh)}) to check its key and accept it, then try again.` };
+      case 'auth': {
+        const said = [e.said && e.said.line, e.message].filter(Boolean).join('\n');
+        if (SshText().TOO_MANY.test(said)) {
+          return {
+            title: 'SSH authentication failed',
+            message: `ssh offered more keys than ${host} accepts before the right one. Add IdentitiesOnly yes and an IdentityFile for this host in ~/.ssh/config, or remove keys you don't use from ssh-agent.`,
+          };
+        }
+        if (!ssh) return { title: 'Authentication failed', message: authMessage(platform) };
+        const who = ssh.host && ssh.user ? `${dn(ssh.user)}@${host}` : host;
+        return {
+          title: 'SSH authentication failed',
+          message: `${who} didn't accept any of your SSH keys${ssh.shownAs ? ` (ssh connected to ${dn(ssh.shownAs)})` : ''}. `
+            + `Pasta Lite can't ask for a key's passphrase: add the key to ssh-agent first, then check it from a terminal (${sshCommandText(ssh)}).\n\n${sshAgentHint(platform)}`,
+        };
+      }
+      case 'not-found':
+        return {
+          title: 'Repository not found',
+          message: `Check the ${op === 'clone' || !e.remote ? 'URL' : `URL of ${dn(e.remote)}`}. For a private repository this can also mean you aren't signed in (many hosts answer "not found" instead of "forbidden").`,
+        };
+      case 'unreachable':
+        return { title: 'Can\'t reach the server', message: 'Check the address and your network connection, then try again.' };
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * What to tell the user about remote op `op`'s ('fetch', 'pull', 'push', 'clone') connection
+   * failure `e` (kind in CONNECT_KINDS): {title, message, detail}, or null for another kind.
+   * detail: git's text, without the askpass line. `platform`: the agent hint's (default the app's).
+   */
+  function connectView(e, { op, platform = C.util.PLATFORM } = {}) {
+    const view = e ? connectText(e.kind, e, e.ssh || null, { op, platform }) : null;
+    return view ? { ...view, detail: shownDetail(e.message) } : null;
+  }
+
+  /** The toast of an unreachable fetch / pull: "Couldn't reach origin: <git's line>". */
+  const unreachableText = (e) => `Couldn't reach ${e.remote ? dn(e.remote) : 'the remote'}: ${dn(firstLine(shownDetail(e.message)))}`;
+
+  /**
+   * Show remote op `op`'s connection failure `e`: a dialog (connectView), or for an unreachable
+   * fetch or pull a toast naming the remote. Resolves false (nothing shown) for any other error,
+   * and for a 'not-found' that names no remote (not the remote's: fetch and push set `remote`).
+   */
+  async function connectAlert(store, e, { op } = {}) {
+    if (!e || !CONNECT_KINDS.has(e.kind)) return false;
+    if (e.kind === 'not-found' && op !== 'clone' && !e.remote) return false;
+    if (e.kind === 'unreachable' && (op === 'fetch' || op === 'pull')) {
+      report(store, Object.assign(new Error(unreachableText(e)), { kind: e.kind }));
+      return true;
+    }
+    await dialog(store).alert(connectView(e, { op }));
+    return true;
+  }
+
+  /** The 'auth' failure `e` of remote op `op`: connectView's dialog. */
+  const authAlert = (store, e, op) => dialog(store).alert(connectView(e, { op }));
 
   async function tagConflictsAlert(store, res) {
     const tags = (res && res.tagConflicts) || [];
@@ -302,11 +431,11 @@
   // What the other flow files build on (they add their flows to PLFlows, and their shared helpers here).
   window.PLFlowKit = {
     C, flow, settle, report, dialog, dn, short, Op, status, currentBranch, localBranches, upstreamOf,
-    keptStashTitle, keptStashText, stashNote, reportOutcome, authAlert, authMessage, tagConflictsAlert,
+    keptStashTitle, keptStashText, stashNote, reportOutcome, authAlert, authMessage, connectView, connectAlert, tagConflictsAlert,
     /** Add flows to window.PLFlows: {name: body} (bodies as for flow(); PLPolicy.FREE_FLOWS skip the guard). */
     register(bodies) {
       for (const [name, body] of Object.entries(bodies)) window.PLFlows[name] = flow(name, body);
     },
-    _internal: { authMessage }, // exported for unit tests only
+    _internal: { authMessage, sshAgentHint }, // exported for unit tests only
   };
 })();

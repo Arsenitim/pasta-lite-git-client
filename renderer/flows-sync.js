@@ -14,22 +14,24 @@
 // All git-derived text reaches the DOM through the dialogs / toasts (textContent only).
 (function () {
   const K = window.PLFlowKit;
-  const { C, settle, report, dialog, dn, short, status, currentBranch, upstreamOf, keptStashTitle, keptStashText, stashNote, reportOutcome, authAlert, tagConflictsAlert } = K;
+  const { C, settle, report, dialog, dn, short, status, currentBranch, upstreamOf, keptStashTitle, keptStashText, stashNote, reportOutcome, connectAlert, tagConflictsAlert } = K;
   const P = window.PLPolicy;
   const { PULL_MODES, DEFAULT_PULL_MODE } = P;
   const PULL_MODE_KEY = (root) => `pl.pullMode.${C.util.repoKey(root)}`;
   const DETACHED_PULL = 'HEAD is detached. Check out a branch to pull into it.';
   const DETACHED_PUSH = 'HEAD is detached. Create or check out a branch to push.';
+  // The connection failures every remote op explains itself (K.connectAlert).
+  const CONNECT_QUIET = ['auth', 'host-key', 'not-found', 'unreachable'];
 
   async function fetchInner(store, o) {
     const remote = o && typeof o.remote === 'string' && o.remote ? o.remote : null;
     try {
-      const res = await store.actions.write('fetch', [remote ? { remote } : {}], { quiet: ['aborted', 'auth'], cancellable: true });
+      const res = await store.actions.write('fetch', [remote ? { remote } : {}], { quiet: ['aborted', ...CONNECT_QUIET], cancellable: true });
       await tagConflictsAlert(store, res);
       return true;
     } catch (e) {
+      if (await connectAlert(store, e, { op: 'fetch' })) return false;
       if (e.kind === 'aborted') store.actions.notify('Fetch cancelled');
-      else if (e.kind === 'auth') await authAlert(store, e);
       else report(store, e);
       return false;
     }
@@ -57,7 +59,7 @@
     return mode === 'rebase' ? `Rebased ${branch} onto ${up}` : `Merged ${up} into ${branch}`;
   }
 
-  const PULL_QUIET = ['aborted', 'auth', 'no-upstream', 'detached', 'conflicts', 'not-fast-forward', 'stash-conflict'];
+  const PULL_QUIET = ['aborted', ...CONNECT_QUIET, 'no-upstream', 'detached', 'conflicts', 'not-fast-forward', 'stash-conflict'];
 
   async function pullInner(store, mode) {
     const branch = currentBranch(store);
@@ -89,12 +91,10 @@
     const a = dialog(store).alert;
     // Pull (rebase) stashes with our recorded autostash (the banner's Restore); the other modes with a plain stash.
     const banner = mode === 'rebase';
+    if (await connectAlert(store, e, { op: 'pull' })) return;
     switch (e.kind) {
       case 'aborted':
         store.actions.notify('Pull cancelled');
-        return;
-      case 'auth':
-        await authAlert(store, e);
         return;
       case 'no-upstream':
         await a({
@@ -201,7 +201,7 @@
 
   // ---------------------------------------------------------------- push
 
-  const PUSH_QUIET = ['aborted', 'auth', 'rejected-behind', 'rejected-stale', 'rejected-hook', 'no-upstream', 'detached'];
+  const PUSH_QUIET = ['aborted', ...CONNECT_QUIET, 'rejected-behind', 'rejected-stale', 'rejected-hook', 'no-upstream', 'detached'];
 
   async function pushFlow(store, o) {
     const branch = (o && typeof o.branch === 'string' && o.branch) || currentBranch(store);
@@ -253,8 +253,8 @@
   async function pushError(store, e, args, { retry, target }) {
     const { branch } = args;
     const a = dialog(store).alert;
+    if (await connectAlert(store, e, { op: 'push' })) return null;
     if (e.kind === 'aborted') { store.actions.notify('Push cancelled'); return null; }
-    if (e.kind === 'auth') { await authAlert(store, e); return null; }
     if (e.kind === 'no-upstream') return NO_UPSTREAM;
     if (e.kind === 'detached') {
       await a({ title: 'Cannot push', message: DETACHED_PUSH });

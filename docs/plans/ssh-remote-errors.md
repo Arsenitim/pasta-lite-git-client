@@ -852,3 +852,39 @@ passes, and W16 shows `git.exe` alive during the hang.
    `src/git-process.js` / `src/exec.js` are unchanged; Copy Diagnostics after the QA cases holds no
    URL credentials, key paths or home path.
 10. **Green CI.** `npm test` and `npm run lint` pass on macOS, Ubuntu and Windows.
+
+---
+
+## 12. Deviations (where the build differs)
+
+Recorded while building S0–S3; none changes a decision of §1.2 or §10.
+
+**S0, the fake ssh.**
+- The tests set `FAKE_SSH_REPO` on Windows from the start (the fake prefers it to the path in git's
+  command), instead of only after Windows CI showed MSYS mangling the path: CI had not run when the
+  fake was written. macOS and Linux exercise the path from git's command. Every test that serves
+  uses one repository, so one variable is enough.
+- Two more variables for the `sshTarget` cases: `FAKE_SSH_WHO` (the `user@host` of the refusal:
+  the alias and token-shaped-user cases) and `FAKE_SSH_LOG` (one line per run: proves git ran ssh
+  once for two push URLs).
+
+**S1.**
+- The two-`pushurl` regression test (V11, planned for S2) landed with S1's "several push URLs → no
+  host" case: one setup proves both.
+- `classifyPush` tries `CONNECT_RULES` with `matches` (any error object, as its `auth` check did),
+  not `kindFor` (GitErrors only); its caller still classifies only an unclassified GitError.
+- `err.remote` is set on every error of a git command (fetch's loop over remotes, push's catch),
+  not on push's refusals before git runs (`detached`, `no-upstream`), which have no remote yet.
+- `parseCloneUrl` keeps refusing an empty port (`ssh://h:/r`); `port` is a number or null.
+- Clone's `changed` / `fingerprint` came from the progress parser's text lines in S1 (no watch
+  existed yet); S2 reads them from the watch's lines, as §4.1 says.
+- "Too many authentication failures" is recognised in the page from the error's text and `said`
+  (`TOO_MANY`, exported by `src/ssh-text.js`): `ssh` carries no ssh line.
+- The page shows a `not-found` as "Repository not found" only when the error names a remote
+  (`e.remote`, set by fetch and push; clone always): another op's `not-found` (a branch) keeps its
+  toast. For fetch, pull and push the text says "Check the URL of *remote*" (clone: "Check the URL").
+- The Windows hint follows §10 Q9 (the ssh-agent service and Pageant; §4.5's "names Pageant only"
+  read as older wording). The `core.sshCommand` clause is behind one constant,
+  `RECOMMEND_WINDOWS_OPENSSH` in `renderer/flows-kit.js` (false): set it to true when W6 passes,
+  and turn the `doesNotMatch(windows, /core\.sshCommand/)` assertion in `test/flows.test.js`
+  ("the ssh-agent hint per platform") into a `match`.

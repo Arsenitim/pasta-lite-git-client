@@ -443,8 +443,10 @@ test('errorView: each kind\'s title and text', () => {
   const t = setup();
   const { errorView } = t.C._internal;
   const v = (kind, o = {}, req = { url: 'git@github.com:o/r.git' }) => errorView({ message: 'git said this', kind, ...o }, req);
-  assert.equal(v('auth').title, 'Authentication failed');
-  assert.match(v('auth').message, /credential helper/);
+  assert.equal(v('auth', {}, { url: 'https://github.com/o/r.git' }).title, 'Authentication failed', 'an https URL: the credential helper text');
+  assert.match(v('auth', {}, { url: 'https://github.com/o/r.git' }).message, /credential helper/);
+  assert.equal(v('auth').title, 'SSH authentication failed', 'an ssh URL: the ssh text (PLFlowKit.connectView)');
+  assert.match(v('auth').message, /^git@github\.com didn't accept any of your SSH keys\. .*\(ssh -T git@github\.com\)/);
   assert.equal(v('host-key').title, 'Unknown host key');
   assert.match(v('host-key').message, /ssh doesn't know github\.com yet .* \(ssh -T git@github\.com\)/);
   assert.match(v('not-found').message, /aren't signed in/);
@@ -607,5 +609,44 @@ test('no parent picked yet: the form asks for one, and Clone stays disabled', as
   assert.equal(t.q('.clone-preview').hidden, false);
   assert.equal(t.btn('Clone').disabled, true);
   t.btn('Cancel').click();
+  await done;
+});
+
+test('errorView: the connection texts of every remote op, with the typed URL\'s host, port and user', () => {
+  const t = setup();
+  const { errorView } = t.C._internal;
+  const v = (kind, o = {}, url = 'ssh://deploy@h.example:2222/r.git') => errorView({ message: 'git said this', kind, ...o }, { url });
+  assert.match(v('host-key').message, /\(ssh -T -p 2222 deploy@h\.example\)/);
+  // A changed host key (main's err.ssh): the fingerprint and ssh-keygen -R for the port; never "accept".
+  const fp = `SHA256:${'Qw9+/'.repeat(9).slice(0, 43)}`;
+  const changed = v('host-key', { ssh: { changed: true, fingerprint: fp } });
+  assert.equal(changed.title, 'The server\'s host key changed');
+  assert.ok(changed.message.includes(`(${fp})`), changed.message);
+  assert.ok(changed.message.includes("ssh-keygen -R '[h.example]:2222'"), changed.message);
+  assert.doesNotMatch(changed.message, /accept/i);
+  assert.equal(v('host-key', { ssh: { changed: true } }, 'git@h.example:r.git').message.includes('ssh-keygen -R h.example)'), true, 'port 22: the plain host');
+  // "Too many authentication failures": its own text.
+  assert.match(v('auth', { message: 'Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures' }).message, /offered more keys than h\.example accepts/);
+  // An IDN host: its ASCII form, said so; the command too.
+  const idn = v('host-key', {}, 'git@bücher.example:o/r.git');
+  assert.match(idn.message, /ssh doesn't know xn--bcher-kva\.example \(the server's name in ASCII\) yet/);
+  assert.match(idn.message, /\(ssh -T git@xn--bcher-kva\.example\)/);
+  // unreachable and not-found: clone keeps its dialogs.
+  assert.equal(v('unreachable').title, 'Can\'t reach the server');
+  assert.match(v('not-found').message, /^Check the URL\./);
+  // The askpass line of git's https prompt is dropped from the shown detail only.
+  assert.equal(v('auth', { message: "error: unable to read askpass response from 'C:/Program Files/Git/usr/bin/false.exe'\nfatal: could not read Username" }, 'https://h/r.git').detail, 'fatal: could not read Username');
+});
+
+test('an error\'s text from git is shown as text: no element is made of it', async () => {
+  const t = setup();
+  const done = (await openForm(t)).done;
+  const s = await startWith(t, 'git@github.com:o/r.git');
+  s.reject({ message: 'git@github.com: Permission denied (publickey). <img src=x onerror=alert(1)>', kind: 'auth' });
+  await H.flush();
+  assert.equal(t.q('.dlg-title').textContent, 'SSH authentication failed');
+  assert.match(t.q('.dlg-detail').textContent, /<img src=x onerror=alert\(1\)>/);
+  assert.equal(t.dom.document.body.findAll((x) => x.tagName === 'IMG').length, 0);
+  t.btn('Close').click();
   await done;
 });

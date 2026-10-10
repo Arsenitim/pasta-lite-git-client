@@ -21,6 +21,7 @@ const { gitAt, GitError, kindError, tagError } = require('./git-process');
 const { createProgressParser } = require('./clone-progress');
 const { nameError } = require('./clone-url');
 const gitErrors = require('./git-errors');
+const { sshFacts } = require('./ssh-text');
 const { redactString } = require('./redact');
 const { homeShort } = require('./fs-paths');
 const { logger } = require('./log');
@@ -51,8 +52,9 @@ const PROGRESS_MS = 100; // at most one progress frame per this, the latest wins
 const MAX_MESSAGE = 2000; // what an error or checkout-failed message keeps of git's lines (20 of at most 500)
 const WIN_LONG_TARGET = 200; // Git for Windows without core.longpaths can't check out paths over 260
 
-// The order rules are tried in after a cancel and a checkout failure (docs/plans §5.6).
-const RULE_ORDER = ['auth', 'hostKey', 'remoteNotFound', 'unreachable', 'dubiousOwnership', 'transportNotAllowed', 'noSpace', 'destinationExists'];
+// The order rules are tried in after a cancel and a checkout failure (docs/plans §5.6): the
+// connection failures every remote op tells apart first (docs/plans/ssh-remote-errors.md §4.1).
+const RULE_ORDER = [...gitErrors.CONNECT_RULES, 'dubiousOwnership', 'transportNotAllowed', 'noSpace', 'destinationExists'];
 
 // Tests only: called between git's exit 0 and the post-steps (a cancel landing there).
 const testHooks = { afterGit: null };
@@ -140,7 +142,8 @@ const exists = (p) => fs.promises.lstat(p).then(() => true, () => false);
  * Rejects with err.made set once the folder was created (the caller removes it). Kinds:
  * invalid-args, not-found (the parent is gone; the remote repository doesn't exist), exists,
  * no-access, no-space, path-too-long, auth, host-key, unreachable, unsupported, unsafe-repo,
- * aborted; none for a failure git explains in a way we don't classify.
+ * aborted; none for a failure git explains in a way we don't classify. A host-key failure whose key
+ * changed carries `ssh: {changed, fingerprint?}` (the page takes the host from the typed URL).
  */
 async function cloneRepo({ source, parent, name, onProgress, onMade, signal, platform = process.platform, localFixtures = false } = {}) {
   const bad = nameError(name, { platform });
@@ -225,17 +228,26 @@ function withMade(err, made) {
 /** git's text lines without "Cloning into '<target>'...": our own target, not news. */
 const told = (text) => text.split('\n').filter((l) => !/^Cloning into /.test(l)).join('\n');
 
+/** {ssh: {changed, fingerprint?}} when ssh said the host key changed (sshFacts of `lines`), else {}. */
+function changedKey(lines) {
+  const facts = sshFacts(lines);
+  if (!facts || !facts.changed) return {};
+  return { ssh: { changed: true, ...(facts.fingerprint ? { fingerprint: facts.fingerprint } : {}) } };
+}
+
 /**
  * A failed git's error, classified by the progress parser's text lines `text` (never the progress
  * frames: the rules read them as stderr). Its message is always replaced, redacted and bounded:
  * git's lines (told), else the kill's own text (spawnGit's, which names no URL), else a plain one.
  * A GitError's own message would be git's whole stderr, or with none its command line, URL included.
+ * A host key that changed is noted (`ssh`, changedKey).
  */
 function classified(err, text) {
   if (!(err instanceof GitError)) return err;
   const kill = err.kind ? err.message : '';
   err.stderr = text || '';
   gitErrors.classify(err, RULE_ORDER);
+  if (err.kind === 'host-key') Object.assign(err, changedKey(String(text || '').split('\n')));
   err.message = redactString(told(text) || kill || 'git clone failed', MAX_MESSAGE);
   return err;
 }

@@ -84,36 +84,33 @@
   };
   const notesText = (notes) => (Array.isArray(notes) ? notes.map((n) => NOTES[n]).filter(Boolean).join(' ') : '');
 
-  /** ssh's user@host for a typed URL (the host-key hint), or the host alone. */
-  function sshTarget(url) {
+  /**
+   * The ssh target of a typed ssh URL ({host, port, user}: the `ssh -T` command of the connection
+   * texts, PLFlowKit.connectView) with what main noted of the failure (`err.ssh`: a changed key),
+   * or null for another URL (an https one's auth text stays as it is).
+   */
+  function cloneSsh(url, err) {
     const u = Url() ? Url().parseCloneUrl(url) : { ok: false };
-    if (!u.ok) return { host: 'the server', who: 'git@<host>' };
-    return { host: u.host, who: u.user ? `${u.user}@${u.host}` : u.host };
+    if (!u.ok || (u.kind !== 'ssh' && u.kind !== 'scp')) return null;
+    return { host: u.host, ...(u.port ? { port: u.port } : {}), ...(u.user ? { user: u.user } : {}), ...((err && err.ssh) || {}) };
   }
 
   /**
    * What to tell the user about a failed clone `err` (kind and message from main): {title,
-   * message, detail}. `req`: the form's values ({url}). detail: git's (cleaned) text.
+   * message, detail}. `req`: the form's values ({url}). detail: git's (cleaned) text. The
+   * connection failures (auth, host-key, not-found, unreachable) read as every remote op's do.
    */
   function errorView(err, req = {}) {
     const text = err && err.message ? String(err.message) : '';
     const kit = window.PLFlowKit;
     switch (err && err.kind) {
       case 'auth':
-        return { title: 'Authentication failed', message: kit ? kit.authMessage() : 'Git could not authenticate with the remote.', detail: text };
-      case 'host-key': {
-        const { host, who } = sshTarget(req.url);
-        return {
-          title: 'Unknown host key',
-          message: `ssh doesn't know ${dn(host)} yet and can't ask here. Connect once from a terminal (ssh -T ${dn(who)}) to check and accept its key, then try again.`,
-          detail: text,
-        };
-      }
+      case 'host-key':
       case 'not-found':
-        if (err.state === 'parent') return { title: 'Choose another folder', message: text };
-        return { title: 'Repository not found', message: 'Check the URL. For a private repository this can also mean you aren\'t signed in (many hosts answer "not found" instead of "forbidden").', detail: text };
       case 'unreachable':
-        return { title: 'Can\'t reach the server', message: 'Check the address and your network connection, then try again.', detail: text };
+        if (err.state === 'parent') return { title: 'Choose another folder', message: text };
+        if (kit) return kit.connectView({ kind: err.kind, message: text, ssh: cloneSsh(req.url, err), said: err.said }, { op: 'clone' });
+        return { title: 'Clone failed', message: 'See Help → Show Logs for details.', detail: text };
       case 'exists':
         return { title: 'Folder already exists', message: `${text.replace(/\.$/, '')}. Choose another name or folder.` };
       case 'no-access':

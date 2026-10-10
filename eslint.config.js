@@ -11,7 +11,7 @@ const RENDERER_GLOBALS = Object.fromEntries([
   'Components', 'Graph', 'PL', 'PLClone', 'PLCloneUrl', 'PLColumns', 'PLComposer', 'PLDiff', 'PLDiffStaging',
   'PLDisplayText', 'PLErrorKinds', 'PLFileList', 'PLFlowKit', 'PLFlows', 'PLHistory', 'PLIcons', 'PLImage',
   'PLImageCache', 'PLImageFormat', 'PLImagePreview', 'PLKeys', 'PLMenus', 'PLOp', 'PLPathNames', 'PLPolicy',
-  'PLRebase', 'PLRepoPicker', 'PLWip', 'Store',
+  'PLRebase', 'PLRepoPicker', 'PLSshText', 'PLWip', 'Store',
 ].map((name) => [name, 'readonly']));
 
 module.exports = [
@@ -45,10 +45,10 @@ module.exports = [
   {
     // Renderer: plain scripts loaded by <script> tags (no modules, no bundler). Most of them
     // also export through module.exports when a test requires them under Node.
-    // src/error-kinds.js, src/image-format.js (the image preview's format catalogue) and the clone
-    // dialog's rules (src/display-text.js, src/path-names.js, src/clone-url.js) are loaded by
-    // index.html too.
-    files: ['renderer/**/*.js', 'src/error-kinds.js', 'src/image-format.js', 'src/display-text.js', 'src/path-names.js', 'src/clone-url.js'],
+    // src/error-kinds.js, src/image-format.js (the image preview's format catalogue), the clone
+    // dialog's rules (src/display-text.js, src/path-names.js, src/clone-url.js) and ssh's lines
+    // (src/ssh-text.js) are loaded by index.html too.
+    files: ['renderer/**/*.js', 'src/error-kinds.js', 'src/image-format.js', 'src/display-text.js', 'src/path-names.js', 'src/clone-url.js', 'src/ssh-text.js'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'script',

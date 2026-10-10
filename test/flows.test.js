@@ -236,6 +236,114 @@ test('auth message: a credential helper for the platform (osxkeychain on macOS, 
   assert.equal(dialogs[0].opts.message, authMessage(win.Components.util.PLATFORM));
 });
 
+// ------------------------------------------------------------------ connection failures (docs/plans/ssh-remote-errors.md §4.5)
+
+const FP = `SHA256:${'Kd2+/'.repeat(9).slice(0, 43)}`; // a fingerprint's shape, built from parts
+
+test('the ssh-agent hint per platform: macOS keychain, Windows\' agent service and Pageant (core.sshCommand only once W6 passed), Linux\'s session', async () => {
+  const { win } = await setup();
+  const { sshAgentHint } = win.PLFlowKit._internal;
+  const mac = sshAgentHint('darwin');
+  for (const re of [/ssh-add --apple-use-keychain ~\/\.ssh\/<key>/, /UseKeychain yes/, /AddKeysToAgent yes/]) assert.match(mac, re);
+  const windows = sshAgentHint('win32');
+  for (const re of [/Git for Windows' own ssh doesn't use Windows' ssh-agent service/, /Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent/, /Pageant/, /GIT_SSH to plink/, /restart Pasta Lite after setting GIT_SSH/]) {
+    assert.match(windows, re);
+  }
+  assert.doesNotMatch(windows, /core\.sshCommand/, 'not recommended until QA row W6 passes (Q9)');
+  assert.match(sshAgentHint('win32', { windowsOpenSsh: true }), /git config --global core\.sshCommand C:\/Windows\/System32\/OpenSSH\/ssh\.exe/);
+  for (const p of ['linux', 'freebsd']) assert.match(sshAgentHint(p), /ssh-add ~\/\.ssh\/<key> in the session Pasta Lite was started from .*SSH_AUTH_SOCK/, p);
+  assert.doesNotMatch(sshAgentHint('linux'), /keychain|Pageant/i);
+});
+
+test('fetch, pull and push: an ssh remote\'s auth failure names user@host, the ssh -T command and the platform\'s hint', async () => {
+  const ssh = { host: 'github.com', user: 'git' };
+  for (const op of ['fetch', 'pull', 'push']) {
+    const s = await setup({}, { [op]: () => { throw err('auth', 'git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.', { ssh, remote: 'origin' }); } });
+    assert.equal(await s.F[op](s.store), false, op);
+    assert.equal(s.dialogs.length, 1, op);
+    const { title, message, detail } = s.dialogs[0].opts;
+    assert.equal(title, 'SSH authentication failed', op);
+    assert.match(message, /^git@github\.com didn't accept any of your SSH keys\. Pasta Lite can't ask for a key's passphrase: add the key to ssh-agent first, then check it from a terminal \(ssh -T git@github\.com\)\./, op);
+    assert.ok(message.endsWith(s.win.PLFlowKit._internal.sshAgentHint(s.win.Components.util.PLATFORM)), op);
+    assert.match(detail, /Permission denied/);
+    assert.equal(s.errors().length, 0, `${op}: not toasted`);
+  }
+  // ssh's resolved host differs from the remote's (an alias): shown as text, the command keeps the alias.
+  const s = await setup({}, { fetch: () => { throw err('auth', 'x', { ssh: { host: 'github-work', user: 'git', shownAs: '192.0.2.7' }, remote: 'origin' }); } });
+  await s.F.fetch(s.store);
+  assert.match(s.dialogs[0].opts.message, /^git@github-work didn't accept any of your SSH keys \(ssh connected to 192\.0\.2\.7\)\. .*\(ssh -T git@github-work\)/);
+});
+
+test('auth: "Too many authentication failures" gets its own text; an https remote keeps the credential helper text', async () => {
+  let s = await setup({}, { fetch: () => { throw err('auth', 'Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures', { ssh: { host: 'h' }, remote: 'origin' }); } });
+  await s.F.fetch(s.store);
+  assert.equal(s.dialogs[0].opts.title, 'SSH authentication failed');
+  assert.match(s.dialogs[0].opts.message, /^ssh offered more keys than h accepts before the right one\. Add IdentitiesOnly yes and an IdentityFile/);
+  assert.doesNotMatch(s.dialogs[0].opts.message, /ssh-agent first/);
+  s = await setup({}, { push: () => { throw err('auth', "fatal: could not read Username for 'https://h': terminal prompts disabled", { remote: 'origin' }); } });
+  await s.F.push(s.store);
+  assert.equal(s.dialogs[0].opts.title, 'Authentication failed');
+  assert.equal(s.dialogs[0].opts.message, s.win.PLFlowKit.authMessage());
+});
+
+test('host-key: unknown asks to connect once and accept; changed shows the fingerprint and ssh-keygen -R, never "accept"', async () => {
+  for (const op of ['fetch', 'pull', 'push']) {
+    let s = await setup({}, { [op]: () => { throw err('host-key', 'Host key verification failed.', { ssh: { host: 'h.example', user: 'git' }, remote: 'origin' }); } });
+    await s.F[op](s.store);
+    assert.equal(s.dialogs[0].opts.title, 'Unknown host key', op);
+    assert.equal(s.dialogs[0].opts.message, 'ssh doesn\'t know h.example yet and can\'t ask here. Connect once from a terminal (ssh -T git@h.example) to check its key and accept it, then try again.');
+    s = await setup({}, { [op]: () => { throw err('host-key', 'Host key verification failed.', { ssh: { host: 'h.example', port: 2222, user: 'git', changed: true, fingerprint: FP }, remote: 'origin' }); } });
+    await s.F[op](s.store);
+    const { title, message } = s.dialogs[0].opts;
+    assert.equal(title, 'The server\'s host key changed', op);
+    assert.match(message, /^h\.example now presents a different key than the one saved for it\. Someone may be intercepting the connection, or the server was reinstalled\./);
+    assert.ok(message.includes(`Check the key (${FP}) with the server's admin or its published fingerprints before you remove the saved one (ssh-keygen -R '[h.example]:2222').`), message);
+    assert.doesNotMatch(message, /accept|StrictHostKeyChecking/i, op);
+  }
+});
+
+test('the ssh -T command: no host (several push URLs) and an IDN host in its ASCII form', async () => {
+  let s = await setup({}, { push: () => { throw err('host-key', 'x', { ssh: { user: 'git' }, remote: 'origin' }); } });
+  await s.F.push(s.store);
+  assert.match(s.dialogs[0].opts.message, /^ssh doesn't know the server yet .*\(ssh -T git@<host>\)/);
+  s = await setup({}, { fetch: () => { throw err('host-key', 'x', { ssh: { host: 'bücher.example', user: 'git' }, remote: 'origin' }); } });
+  await s.F.fetch(s.store);
+  assert.match(s.dialogs[0].opts.message, /^ssh doesn't know xn--bcher-kva\.example \(the server's name in ASCII\) yet .*\(ssh -T git@xn--bcher-kva\.example\)/);
+});
+
+test('not-found: a dialog naming the remote; unreachable: a toast naming the remote and git\'s line for fetch and pull, a dialog for push', async () => {
+  let s = await setup({}, { fetch: () => { throw err('not-found', 'ERROR: Repository not found.\nfatal: Could not read from remote repository.', { remote: 'upstream' }); } });
+  await s.F.fetch(s.store);
+  assert.equal(s.dialogs[0].opts.title, 'Repository not found');
+  assert.match(s.dialogs[0].opts.message, /^Check the URL of upstream\. For a private repository/);
+  const line = 'ssh: connect to host h port 22: Connection refused';
+  for (const op of ['fetch', 'pull']) {
+    s = await setup({}, { [op]: () => { throw err('unreachable', `${line}\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights`, { remote: 'origin' }); } });
+    assert.equal(await s.F[op](s.store), false);
+    assert.equal(s.dialogs.length, 0, op);
+    assert.deepEqual(s.errors().map((e) => [e.message, e.kind]), [[`Couldn't reach origin: ${line}`, 'unreachable']], op);
+  }
+  s = await setup({}, { push: () => { throw err('unreachable', `${line}\nfatal: Could not read from remote repository.`, { remote: 'origin' }); } });
+  await s.F.push(s.store);
+  assert.equal(s.dialogs[0].opts.title, 'Can\'t reach the server');
+  assert.match(s.dialogs[0].opts.detail, /Connection refused/);
+  assert.equal(s.errors().length, 0);
+  // A not-found that isn't the remote's (no `remote`): toasted as before.
+  s = await setup({}, { pull: () => { throw err('not-found', 'no such branch'); } });
+  await s.F.pull(s.store);
+  assert.equal(s.dialogs.length, 0);
+  assert.deepEqual(s.errors().map((e) => e.message), ['no such branch']);
+});
+
+test('the askpass line of git\'s own https prompt is dropped from a shown detail (the error itself is not rewritten)', async () => {
+  const message = "error: unable to read askpass response from 'C:/Program Files/Git/usr/bin/false.exe'\nfatal: could not read Username for 'https://h': terminal prompts disabled";
+  const e = err('auth', message, { remote: 'origin' });
+  const s = await setup({}, { fetch: () => { throw e; } });
+  await s.F.fetch(s.store);
+  assert.equal(s.dialogs[0].opts.detail, "fatal: could not read Username for 'https://h': terminal prompts disabled");
+  assert.equal(e.message, message);
+});
+
 test("util.PLATFORM / IS_MAC: the preload's window.api.platform, never the user agent; without a preload, linux", () => {
   const file = require.resolve('../renderer/components.js');
   const load = (win) => {

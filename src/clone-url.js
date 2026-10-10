@@ -8,8 +8,8 @@
  * it), like src/error-kinds.js. The page checks as the user types; main checks again before git
  * runs (src/clone.js, src/ops.js cloneCheck): the page's answer is a convenience only.
  *
- * parseCloneUrl(text) -> {ok: true, url, kind, host, user, path, display, notes}
- *   | {ok: false, reason}. A typed network URL only: https, http, ssh://, scp-like user@host:path
+ * parseCloneUrl(text) -> {ok: true, url, kind, host, port, user, path, display, notes}
+ *   | {ok: false, reason}. `port`: a URL's port as a number, or null (none, and scp-like URLs). A typed network URL only: https, http, ssh://, scp-like user@host:path
  *   or git://. A local path, a file: URL (any host), a UNC or device path and a drive path are
  *   refused on every platform (the page can't be trusted to name its platform): the app clones
  *   from remotes only. So are git's remote helpers (`<x>::`, other schemes),
@@ -17,6 +17,8 @@
  *   as typed in .git/config). `notes`: 'insecure' (http, git), 'user-in-url'.
  * deriveName(source, {platform}) -> the folder name git would derive ('' when none is usable).
  * nameError(name, {platform}) -> the message for a refused folder name, or null.
+ * userOk(name) -> true for a user name the clone rules accept (main checks the user ssh names in
+ *   its refusal with it before showing it in a command: src/remote.js).
  * deriveName and nameError take `{platform}`: process.platform under Node by default; the
  * renderer passes window.api.platform.
  */
@@ -47,6 +49,9 @@
   const TOKEN_PREFIX = /^(?:github_pat_|gh[pousr]_|glpat-|glptt-|hf_|npm_|pypi-|xox[abpr]-|(?:AKIA|ASIA)[0-9A-Z]{12})/;
   const tokenShaped = (u) => TOKEN_PREFIX.test(u) || (/^[A-Za-z0-9]{24,}$/.test(u) && /[A-Za-z]/.test(u) && /\d/.test(u));
 
+  /** True for a user name that may be shown and used: USER's characters, and not token-shaped. */
+  const userOk = (name) => typeof name === 'string' && USER.test(name) && !tokenShaped(name);
+
   /** The refusal of a URL's userinfo (the part before '@'), or null when the user name may stay. */
   function userError(userinfo) {
     if (userinfo.includes(':')) return 'Remove the password from the URL: git would keep it in plain text in the repository\'s settings. A credential helper stores it safely';
@@ -61,12 +66,12 @@
     return HOST.test(host) ? null : 'The host name isn\'t valid';
   };
 
-  /** An accepted URL with its notes (`user`: null or the user name). */
-  function accepted(url, kind, host, user, path) {
+  /** An accepted URL with its notes (`user`: null or the user name; `port`: null or a number). */
+  function accepted(url, kind, host, user, path, port = null) {
     const notes = [];
     if (INSECURE.has(kind)) notes.push('insecure');
     if (user && !(user === 'git' && (kind === 'ssh' || kind === 'scp'))) notes.push('user-in-url');
-    return { ok: true, url, kind, host, user, path, display: url, notes };
+    return { ok: true, url, kind, host, port, user, path, display: url, notes };
   }
 
   /** `scheme://[user@]host[:port][/path]` of a scheme in SCHEMES. */
@@ -91,7 +96,7 @@
     const why = hostError(host);
     if (why) return refuse(why);
     if (port !== undefined && (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > MAX_PORT)) return refuse('The port isn\'t valid');
-    return accepted(url, scheme, host, user, path);
+    return accepted(url, scheme, host, user, path, port ? Number(port) : null);
   }
 
   /** scp-like `[user@]host:path`, split into its parts (user null when there is none). */
@@ -209,6 +214,7 @@
   exports.parseCloneUrl = parseCloneUrl;
   exports.deriveName = deriveName;
   exports.nameError = nameError;
+  exports.userOk = userOk;
 })(
   typeof module !== 'undefined' ? module.exports : (window.PLCloneUrl = {}), // NOSONAR(S1121): the CommonJS-or-window export idiom
   typeof module !== 'undefined' ? require('./display-text') : window.PLDisplayText,

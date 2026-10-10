@@ -2,11 +2,18 @@
 // Talking to remotes: fetch (never force-updating local tags), push with an explicit refspec,
 // setting an upstream, and which remotes are mirrors whose fetch would rewrite local branches.
 // git.js re-exports all of it.
+//
+// A failed fetch or push is told apart as clone tells it (gitErrors.CONNECT_RULES: auth, host-key,
+// not-found, unreachable; docs/plans/ssh-remote-errors.md), carries the remote it failed on
+// (`remote`), and for an ssh remote's auth or host-key failure the ssh target the message names
+// (`ssh`, sshTarget).
 const { kindError, tagError, run, out, tryOut } = require('./exec');
 const { headState } = require('./repo-dirs');
 const { verify, remotes, upstreamOf } = require('./git-reads');
 const { PREFIX, after, branchOf, fullBranch, isRefspecSafe } = require('./gitref');
 const gitErrors = require('./git-errors');
+const { sshFacts, splitRemote, asciiHost } = require('./ssh-text');
+const { userOk } = require('./clone-url');
 const { logger } = require('./log');
 
 /** Default timeout for commands that talk to a remote (fetch / push). */
@@ -59,6 +66,62 @@ async function mirrorRemotes(cwd) {
   return [...found].map(([remote, why]) => ({ remote, why }));
 }
 
+/** git's stderr in `err` as lines (sshFacts reads them). */
+const stderrLines = (err) => String((err && err.stderr) || '').split(/\r\n|\n|\r/);
+
+// The host ssh names in its refusal (the resolved HostName): shown as text only, never in a command.
+const SHOWN_HOST = /^[A-Za-z0-9._:[\]-]{1,253}$/;
+const unbracketed = (host) => host.replace(/^\[(.*)\]$/, '$1').toLowerCase();
+
+/**
+ * The ssh target of an 'auth' or 'host-key' failure of `remote`, for the message's `ssh -T`
+ * command: {host?, port?, user?, shownAs?, changed?, fingerprint?}, or null when the remote's URL
+ * is no ssh URL splitRemote can show (an https remote's auth text stays as it is). The host and the
+ * port come from the URL git used (`remote get-url --all` applies insteadOf / pushInsteadOf),
+ * never from ssh's line, which names the resolved host and no alias: that one is only shown, as
+ * `shownAs`. Several URLs (pushurls): no host, the failing one can't be told apart. The user is
+ * ssh's effective one (`facts.user`, which includes a User from ~/.ssh/config) when userOk accepts
+ * it, else the URL's. `facts`: sshFacts of git's stderr, or null. Never rejects: no signal (a
+ * cancel's explanation asks too), a 10 s timeout, and a broken config is no target.
+ */
+async function sshTarget(cwd, remote, facts, { push = false } = {}) {
+  const raw = await tryOut(cwd, ['remote', 'get-url', ...(push ? ['--push'] : []), '--all', remote], { signal: null, timeout: 10000 })
+    .catch(() => null);
+  const urls = String(raw || '').split('\n').map((u) => u.trim()).filter(Boolean);
+  const split = urls.length === 1 ? splitRemote(urls[0]) : null;
+  if (!split && !(urls.length > 1 && facts)) return null;
+  const ssh = {};
+  if (split) {
+    ssh.host = split.host;
+    if (split.port) ssh.port = split.port;
+  }
+  const user = facts && userOk(facts.user) ? facts.user : split && split.user;
+  if (user) ssh.user = user;
+  if (facts && facts.host && SHOWN_HOST.test(facts.host) && !(split && unbracketed(facts.host) === unbracketed(split.host))) {
+    ssh.shownAs = asciiHost(facts.host);
+  }
+  if (facts && facts.changed) ssh.changed = true;
+  if (facts && facts.fingerprint) ssh.fingerprint = facts.fingerprint;
+  return ssh;
+}
+
+/** {ssh} for an 'auth' or 'host-key' failure of an ssh remote (sshTarget), else {}. */
+async function sshOf(cwd, remote, kind, facts, o) {
+  if (kind !== 'auth' && kind !== 'host-key') return {};
+  const ssh = await sshTarget(cwd, remote, facts, o);
+  return ssh ? { ssh } : {};
+}
+
+/** `err` with the remote it failed on (`remote`), unless it names one already. */
+function withRemote(err, remote) {
+  if (err && typeof err === 'object' && err.remote === undefined) {
+    try {
+      err.remote = remote;
+    } catch { /* frozen */ }
+  }
+  return err;
+}
+
 /**
  * `fetch --prune --tags` one remote. Local tags that differ from the remote's are never
  * overwritten: git rejects them ("would clobber existing tag") and the whole fetch fails, so
@@ -79,11 +142,11 @@ async function fetchRemote(cwd, remote, opts, skipTags = []) {
     await run(cwd, ['fetch', '--porcelain', '--prune', '--tags', '--no-recurse-submodules', remote, ...refspecs], remoteOpts(opts));
     return skipTags;
   } catch (err) {
-    // Credentials (the anchored patterns push uses), or "refusing to fetch into branch
-    // 'refs/heads/x' checked out at '<path>'": the refspec writes local branches and a worktree
-    // has that one checked out (git's message kept).
-    const kind = gitErrors.kindFor(err, 'auth', 'checkedOutElsewhere');
-    if (kind) throw tagError(err, kind);
+    // A connection failure (the anchored patterns push and clone use), or "refusing to fetch into
+    // branch 'refs/heads/x' checked out at '<path>'": the refspec writes local branches and a
+    // worktree has that one checked out (git's message kept).
+    const kind = gitErrors.kindFor(err, ...gitErrors.CONNECT_RULES, 'checkedOutElsewhere');
+    if (kind) throw tagError(err, kind, await sshOf(cwd, remote, kind, sshFacts(stderrLines(err))));
     const rejected = gitErrors.unclassified(err) ? gitErrors.rejectedFetchRefs(err.stdout) : [];
     const tags = rejected.map((r) => after(r, PREFIX.TAGS)).filter((t) => t !== null);
     const next = [...new Set([...skipTags, ...tags])];
@@ -97,13 +160,21 @@ async function fetchRemote(cwd, remote, opts, skipTags = []) {
  * @param {{remote?: string, signal?: AbortSignal, timeout?: number}} [opts] timeout per remote,
  *   default REMOTE_TIMEOUT_MS; a timeout/abort throws kind 'timeout'/'aborted'.
  * @returns {Promise<{tagConflicts: string[]}>} local tags left alone because the remote's differ.
- * Credential failures throw kind 'auth' (as push does), so pull reports them the same way.
+ * Connection failures throw kind 'auth', 'host-key', 'not-found' or 'unreachable' (as push and
+ * clone do), so pull reports them the same way. Every error names the remote it failed on
+ * (`remote`: Fetch All fetches one after another).
  */
 async function fetch(cwd, { remote, signal, timeout } = {}) {
   if (remote !== undefined) checkRemoteName(remote);
   const names = remote !== undefined ? [remote] : await remotes(cwd);
   const tagConflicts = [];
-  for (const name of names) tagConflicts.push(...(await fetchRemote(cwd, name, { signal, timeout })));
+  for (const name of names) {
+    try {
+      tagConflicts.push(...(await fetchRemote(cwd, name, { signal, timeout })));
+    } catch (err) {
+      throw withRemote(err, name);
+    }
+  }
   return { tagConflicts: [...new Set(tagConflicts)] };
 }
 
@@ -111,7 +182,8 @@ async function fetch(cwd, { remote, signal, timeout } = {}) {
  * Push a local branch with an explicit refspec. Target defaults to the branch's upstream;
  * `remoteBranch` overrides the remote branch name. `force`: false | 'lease' | truthy (plain).
  * Rejections throw kind rejected-behind | rejected-stale | rejected-hook (with remoteMessage)
- * | rejected | auth | timeout | aborted.
+ * | rejected | auth | host-key | not-found | unreachable | mirror-repo | timeout | aborted; a
+ * failure of git names the remote (`remote`), an ssh auth / host-key one its target (`ssh`).
  */
 async function push(cwd, { remote, branch, remoteBranch, force, signal, timeout } = {}) {
   for (const [what, v] of [['branch', branch], ['remoteBranch', remoteBranch]]) {
@@ -141,7 +213,8 @@ async function push(cwd, { remote, branch, remoteBranch, force, signal, timeout 
     await run(cwd, ['push', '--porcelain', '--recurse-submodules=no', ...forceArgs, target, `refs/heads/${local}:refs/heads/${dst}`], remoteOpts({ signal, timeout }));
   } catch (err) {
     const c = gitErrors.unclassified(err) && gitErrors.classifyPush(err);
-    throw c ? tagError(err, c.kind, c.extra) : err;
+    if (c) tagError(err, c.kind, { ...c.extra, ...(await sshOf(cwd, target, c.kind, sshFacts(stderrLines(err)), { push: true })) });
+    throw withRemote(err, target);
   }
   return { remote: target, branch: local, remoteBranch: dst, forced: force || false };
 }
@@ -179,4 +252,7 @@ async function setUpstream(cwd, localBranch, remote, remoteBranch) {
   }
 }
 
-module.exports = { REMOTE_TIMEOUT_MS, checkRemoteName, writesBranches, mirrorRemotes, fetch, push, setUpstream };
+module.exports = {
+  REMOTE_TIMEOUT_MS, checkRemoteName, writesBranches, mirrorRemotes, fetch, push, setUpstream,
+  _internal: { sshTarget }, // exported for unit tests only
+};

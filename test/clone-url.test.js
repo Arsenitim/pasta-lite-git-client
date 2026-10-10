@@ -261,3 +261,20 @@ test('nameError on every platform: no leading dot (a dot-folder in home: ~/.conf
     assert.equal(nameError('a.b', { platform }), null, 'a dot inside is fine');
   }
 });
+
+test('port: a URL\'s port as a number (ssh -T -p in the clone dialog), none for scp-like and portless URLs', () => {
+  assert.equal(parseCloneUrl('ssh://git@h:2222/r.git').port, 2222);
+  assert.equal(parseCloneUrl('https://h:8443/r.git').port, 8443);
+  assert.equal(parseCloneUrl('ssh://git@h/r.git').port, null);
+  assert.equal(parseCloneUrl('git@h.example:o/r.git').port, null);
+});
+
+test('userOk: the clone rules\' user names, never a token-shaped one (main checks ssh\'s user with it)', () => {
+  const { userOk } = require('../src/clone-url');
+  for (const u of ['git', 'deploy', 'a.b_c-d', 'x1']) assert.equal(userOk(u), true, u);
+  // Token shapes built from parts, never written out.
+  const tokenish = ['gh', 'p_', 'A1b2'.repeat(9)].join('');
+  for (const u of [tokenish, 'Ab1'.repeat(9), '-oProxyCommand', 'a b', 'a$(id)', 'u'.repeat(40), '', null, undefined, 7]) {
+    assert.equal(userOk(u), false, String(u));
+  }
+});

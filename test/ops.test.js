@@ -304,6 +304,18 @@ test('stash ops and checkout through the registry', async () => {
   assert.equal(h.read(dir, 'README.md'), 'wip\n');
 });
 
+test('serializeError carries a remote op\'s ssh target and remote as plain data (docs/plans/ssh-remote-errors.md §4.1)', () => {
+  const ge = Object.assign(new GitError(['fetch'], 128, 'git@h: Permission denied (publickey).\n', ''), {
+    kind: 'auth', remote: 'origin', ssh: { host: 'h', port: 2222, user: 'git', shownAs: '192.0.2.7' },
+  });
+  const s = ops.serializeError(ge);
+  assert.deepEqual(s, {
+    message: 'git@h: Permission denied (publickey).', kind: 'auth', exitCode: 128,
+    ssh: { host: 'h', port: 2222, user: 'git', shownAs: '192.0.2.7' }, remote: 'origin',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(s)), s);
+});
+
 test('serializeError keeps kind, exitCode, known extras, plain result, nested error messages; drops stack, args, stderr, env', () => {
   const ge = new GitError(['push', 'origin'], 1, 'rejected\n', '');
   Object.assign(ge, {
