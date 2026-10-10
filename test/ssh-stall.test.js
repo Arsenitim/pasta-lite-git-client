@@ -211,3 +211,15 @@ test('logStall: one warning with the op, the kind and the timer, never git\'s te
   assert.deepEqual([recs[0].op, recs[0].kind, recs[0].ms], ['fetch', 'auth', 10000]);
   assert.ok(!JSON.stringify(recs).includes('Permission denied'));
 });
+
+test('a normal disconnect ("Received disconnect … 11: Bye") followed by silence never fires; the other reasons arm', () => {
+  const { w, timers, tick, stalls } = watch(500);
+  feed(w, 'Received disconnect from 192.0.2.1 port 22:11: Bye Bye\r\n');
+  assert.equal(timers.size, 0, 'not an ending: a successful fetch may print it and then transfer in silence');
+  tick();
+  assert.equal(stalls(), 0);
+  feed(w, 'Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures\r\n');
+  assert.equal(timers.size, 1);
+  tick();
+  assert.equal(stalls(), 1);
+});
