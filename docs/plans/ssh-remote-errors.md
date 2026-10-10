@@ -320,7 +320,9 @@ key, or it changed (`ssh.changed`), and can't ask (no terminal)".
 - **`src/clone.js`**: the same in its cancel branch (`:191-193`), from its watcher's lines.
 - No `said` for a `timeout` (decision 7), and none from a second splitter: the watcher's lines are
   the only source.
-- The lines never cross IPC or reach a log; only `said.line` does, redacted.
+- The lines never reach a log, and on a cancel only `said.line` crosses IPC, redacted. After a
+  stall (§4.3) they become the error's message: the same text git's stderr gives a failure that
+  ends by itself, which the page shows today.
 
 ### 4.3 The ssh stall watchdog (S2)
 
@@ -557,7 +559,7 @@ All of it reaches the DOM through the dialogs' and toasts' `textContent`, as now
 | The env allowlist | Unchanged (`GIT_ENV_ALLOW`, `src/git-process.js:125`). S3 adds two non-`GIT_` variables for three commands, with constant values: a path derived from git's own installation (never from repo config, the page or the remote) and `force`. The user's own `SSH_ASKPASS*` win |
 | A repo's `core.sshCommand` | Runs as today (asked about by the trust check, SECURITY.md "Scope"). It also sees `SSH_ASKPASS` = `false.exe`, which can do nothing |
 | Killing | The watchdog aborts the op's own composed signal: the existing cancel path (`signalGroup`, `src/git-process.js:265-318`). No new pid-based kill, no new window for pid reuse, no change to the process layer |
-| Leaks through `said` | Only a line that matches a fixed ssh pattern; `redactString` (URL userinfo, token shapes, the home folder); `INVISIBLE` stripped; at most 300 characters; `textContent` only. The watcher's lines never cross IPC or reach a log |
+| Leaks through `said` | Only a line that matches a fixed ssh pattern; `redactString` (URL userinfo, token shapes, the home folder); `INVISIBLE` stripped; at most 300 characters; `textContent` only. The watcher's lines never reach a log; after a stall they are the error's message, as git's stderr is for any failure |
 | Leaks through `ssh` | A host and port from a shell-safe split (letters, digits, `.`, `_`, `-`, or bracketed IPv6; no path, no password), a user that passed `userOk` (no token shapes) or the same charset, a display-only `shownAs`, and a public fingerprint. The `ssh -T` text is shown, never run |
 | Lookalike hosts | A non-ASCII host is shown in its ASCII form, so the user copies the name ssh uses |
 | Server-controlled text | An ssh server's banner is printed to stderr after the host key was verified, so a server could print a fake ending: the watchdog would then end that server's own op (a self-inflicted failure), or a fake "host key changed" block would show a warning about itself. Nothing is executed or accepted because of it |
@@ -847,7 +849,7 @@ passes, and W16 shows `git.exe` alive during the hang.
    fails within about 10 s instead of hanging, with no console window; the user's own
    `SSH_ASKPASS` / `SSH_ASKPASS_REQUIRE` are never replaced; macOS and Linux never get either
    variable from the app.
-9. **No new leaks, no new coupling.** The watcher's lines never cross IPC or reach a log;
+9. **No new leaks, no new coupling.** The watcher's lines never reach a log (a stall's message is git's own stderr, as for any failure);
    `said.line` is redacted and capped; `ssh` carries only a shell-safe host, port and user, a
    display-only `shownAs` and a public fingerprint; `src/ssh-text.js` requires nothing and
    `src/git-process.js` / `src/exec.js` are unchanged; Copy Diagnostics after the QA cases holds no
@@ -859,6 +861,40 @@ passes, and W16 shows `git.exe` alive during the hang.
 ## 12. Deviations (where the build differs)
 
 Recorded while building S0–S3; none changes a decision of §1.2 or §10.
+
+**Review fixes (after S4; the expert and security reviews).**
+- A changed host key carries `keyName`, the known_hosts name ssh printed ("Host key for
+  `[127.0.0.1]:22222` has changed"), checked against a shell-safe pattern; `ssh-keygen -R` uses it,
+  so an alias or a port from `~/.ssh/config` names the right entry. The fingerprint and the name are
+  the first after the warning (a server's banner can print a forged block later).
+- "Received disconnect … 11:" (a normal "Bye") is no ending: a successful fetch may print it and
+  then transfer in silence for longer than the window. A bare `Permission denied (publickey).`
+  (older and vendor ssh) is `auth` again, as before S1.
+- §4.3's wiring lives in the watch: `createSshWatch` owns its abort, `signalFor(signal)` (the
+  composed signal), `isStall(err, signal)` (the race rule, unit-tested) and `logStall(op, err)`;
+  remote.js and clone.js use them. They are methods of the watch rather than separate exports:
+  the callers' `require('./ssh-stall')` lines sit next to S3's `require('./ssh-env')`, and a later
+  change to them would keep S3's commit from reverting cleanly. For the same reason the composed
+  signal stays inline in the two lines S3 changed (they also set the askpass env) until the S3
+  review commit moves them to `signalFor`; with S3 reverted, those two lines keep the S2 form.
+- A fetch's target is the remote's first URL (`get-url` without `--all`), as git fetches from it;
+  a push still reads every push URL.
+- ssh's user counts only when ssh named the URL's own host; with ProxyJump the refusal can be the
+  jump host's. Several push URLs therefore give no user either.
+- One user-name rule, §13 Q7's (`USER` and `tokenShaped` in `src/ssh-text.js`, which
+  `src/clone-url.js` now uses; `src/ssh-text.js` loads before it in the page): a remote's URL user
+  outside it refuses the split (`ssh://deploy+ci@host/r` too, which §4.1 allowed), a token-shaped
+  one is left out. A bracketed scp host must be an IPv6 literal (two colons at least): git reads
+  `[host:port]:path` as a host and a port, which the split refuses instead of misreading.
+- The Windows hint (§4.5) leads with Pageant and plink, which work with Git for Windows' own ssh:
+  that ssh uses neither Windows' agent service nor an agent from Git Bash or start-ssh-agent.cmd
+  (those serve their own console only). The service's steps are for a git that runs Windows'
+  OpenSSH already; with `RECOMMEND_WINDOWS_OPENSSH` they become the recommendation.
+  `ssh-keygen -R '[h]:p'` is double-quoted on Windows (PowerShell and cmd).
+- The stall test's lower bound is 300 ms after the fake's timestamp (written once its lines are
+  out, a moment after git may have read them), not 450.
+- `remote._internal` is gone (the race test moved to `test/ssh-stall.test.js`), and so are
+  `authAlert` and the frozen-error guard in `withRemote`.
 
 **S0, the fake ssh.**
 - The tests set `FAKE_SSH_REPO` on Windows from the start (the fake prefers it to the path in git's
@@ -924,8 +960,26 @@ Recorded while building S0–S3; none changes a decision of §1.2 or §10.
 
 The rows of §7.5, as a flow: steps and expected result there, observed and result here. Nothing
 below has run yet: the Windows box was off when S0–S3 were built, and no row is marked passed
-without being run. **W6 comes first.** Until it passes, `RECOMMEND_WINDOWS_OPENSSH` stays false
-(§12, S1); until W3, W4, W10, W11, W12 and W15 pass, S3's commit stays revertable on its own.
+without being run.
+
+**The merge gate.** The branch merges only when all of these pass:
+1. **Windows CI** green, with the Windows-only tests run, not skipped: the stall tree test, the
+   `false.exe` test and the askpass `env` test's Windows branch (S0's `serve` / `deny` among them).
+2. **W6** (first): Windows' OpenSSH doesn't hang after a successful connection.
+3. **S2's rows**: W16 (`git.exe` alive during the hang), W17, W7. If W16 shows git gone, S2's
+   watchdog is held back (§9).
+4. **S3's rows**: W3, W4, W10, W11, W12, W15. If one fails, revert S3's commits (they are listed in
+   the PR description) and note it in clone-repository.md §15 and roadmap.md §3.5.
+
+**The edits once it passes:**
+- W6 passed: `RECOMMEND_WINDOWS_OPENSSH = true` in `renderer/flows-kit.js`, and in the "ssh-agent
+  hint per platform" test of `test/flows.test.js` the `doesNotMatch(windows, /git config --global
+  core\.sshCommand/)` becomes a `match` (and the `openSsh` paragraph's expected text the gated one).
+- S2's rows passed: in CHANGELOG.md drop the "**Pending Windows QA** (…)" lead of the stall bullet
+  and say "no longer keeps … They now end", as a fact.
+- S3's rows passed: the same for the askpass bullet, and in SECURITY.md the "ssh on Windows"
+  paragraph drops "pending Windows QA" and says what the app does, as a fact.
+- Then mark the rows below passed, with what was observed.
 
 | # | Steps (§7.5) | Expected | Observed | Result |
 |---|---|---|---|---|

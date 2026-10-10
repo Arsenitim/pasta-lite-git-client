@@ -80,10 +80,12 @@ On Windows:
   connecting over ssh may have started a background agent (gpg-agent, an ssh connection master):
   it is stopped with the command and starts again when next needed.
 - Git and its helpers no longer flash a console window.
-- An ssh that had already failed no longer keeps a fetch, pull, push or clone waiting: Windows' own
-  OpenSSH (run when `core.sshCommand` or `GIT_SSH_COMMAND` names it, or when Git for Windows was
-  installed with "Use external OpenSSH") prints its error and then never exits, so fetch and push
-  sat until their two-minute timeout and a clone until it was cancelled. They now end about 10
+- **Pending Windows QA** (built and tested on macOS with a fake ssh; not yet verified on Windows,
+  see docs/plans/ssh-remote-errors.md §13): an ssh that had already failed should no longer keep a
+  fetch, pull, push or clone waiting. Windows' own OpenSSH (run when `core.sshCommand` or
+  `GIT_SSH_COMMAND` names it, or when Git for Windows was installed with "Use external OpenSSH")
+  prints its error and then never exits, so fetch and push sat until their two-minute timeout and
+  a clone until it was cancelled. They are meant to end about 10
   seconds after ssh's error, with its explanation.
 - Windows' own OpenSSH no longer waits for a key passphrase or a host-key answer on a console
   nobody can see: fetch, pull, push and clone give ssh Git for Windows' `false.exe` as its askpass,
