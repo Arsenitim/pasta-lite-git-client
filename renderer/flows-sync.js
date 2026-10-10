@@ -21,7 +21,7 @@
   const DETACHED_PULL = 'HEAD is detached. Check out a branch to pull into it.';
   const DETACHED_PUSH = 'HEAD is detached. Create or check out a branch to push.';
   // The connection failures every remote op explains itself (K.connectAlert).
-  const CONNECT_QUIET = ['auth', 'host-key', 'not-found', 'unreachable'];
+  const CONNECT_QUIET = K.CONNECT_KINDS;
 
   async function fetchInner(store, o) {
     const remote = o && typeof o.remote === 'string' && o.remote ? o.remote : null;

@@ -240,17 +240,23 @@ test('auth message: a credential helper for the platform (osxkeychain on macOS, 
 
 const FP = `SHA256:${'Kd2+/'.repeat(9).slice(0, 43)}`; // a fingerprint's shape, built from parts
 
-test('the ssh-agent hint per platform: macOS keychain, Windows\' agent service and Pageant (core.sshCommand only once W6 passed), Linux\'s session', async () => {
+test('the ssh-agent hint per platform: macOS keychain; Windows: Pageant for Git for Windows\' own ssh, the agent service only for Windows\' OpenSSH (recommended only once W6 passed); Linux\'s session', async () => {
   const { win } = await setup();
   const { sshAgentHint } = win.PLFlowKit._internal;
   const mac = sshAgentHint('darwin');
   for (const re of [/ssh-add --apple-use-keychain ~\/\.ssh\/<key>/, /UseKeychain yes/, /AddKeysToAgent yes/]) assert.match(mac, re);
   const windows = sshAgentHint('win32');
-  for (const re of [/Git for Windows' own ssh doesn't use Windows' ssh-agent service/, /Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent/, /Pageant/, /GIT_SSH to plink/, /restart Pasta Lite after setting GIT_SSH/]) {
-    assert.match(windows, re);
-  }
-  assert.doesNotMatch(windows, /core\.sshCommand/, 'not recommended until QA row W6 passes (Q9)');
-  assert.match(sshAgentHint('win32', { windowsOpenSsh: true }), /git config --global core\.sshCommand C:\/Windows\/System32\/OpenSSH\/ssh\.exe/);
+  const [bundled, openSsh] = windows.split('\n\n');
+  // What works with the bundled ssh (the default) comes first: Pageant and plink.
+  assert.equal(bundled, 'Git for Windows\' own ssh can\'t use a key that needs its passphrase here, and it doesn\'t use Windows\' ssh-agent service. '
+    + 'Load the key in PuTTY\'s Pageant and set the GIT_SSH environment variable to PuTTY\'s plink.exe; restart Pasta Lite after setting it (it reads its environment when it starts).');
+  // The service's steps only for a git that runs Windows' OpenSSH already.
+  assert.equal(openSsh, 'If git runs Windows\' own OpenSSH (core.sshCommand or GIT_SSH_COMMAND names it, or Git for Windows was installed with "Use external OpenSSH"): '
+    + 'its ssh-agent service is disabled by default. In an administrator PowerShell: Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent, then ssh-add.');
+  assert.doesNotMatch(windows, /git config --global core\.sshCommand/, 'not recommended until QA row W6 passes (Q9)');
+  const gated = sshAgentHint('win32', { windowsOpenSsh: true });
+  assert.match(gated, /\n\nOr let git use Windows' OpenSSH and its ssh-agent service: git config --global core\.sshCommand C:\/Windows\/System32\/OpenSSH\/ssh\.exe; its ssh-agent service is disabled by default\./);
+  assert.ok(gated.startsWith(bundled), 'Pageant still first');
   for (const p of ['linux', 'freebsd']) assert.match(sshAgentHint(p), /ssh-add ~\/\.ssh\/<key> in the session Pasta Lite was started from .*SSH_AUTH_SOCK/, p);
   assert.doesNotMatch(sshAgentHint('linux'), /keychain|Pageant/i);
 });
@@ -300,6 +306,18 @@ test('host-key: unknown asks to connect once and accept; changed shows the finge
     assert.ok(message.includes(`Check the key (${FP}) with the server's admin or its published fingerprints before you remove the saved one (ssh-keygen -R '[h.example]:2222').`), message);
     assert.doesNotMatch(message, /accept|StrictHostKeyChecking/i, op);
   }
+});
+
+test('a changed host key: ssh-keygen -R names the key ssh printed (an alias\'s resolved host and port), quoted for the platform\'s shells', async () => {
+  const ssh = { host: 'github-work', user: 'git', changed: true, fingerprint: FP, keyName: '[192.0.2.7]:2222' };
+  const s = await setup({}, { fetch: () => { throw err('host-key', 'Host key verification failed.', { ssh, remote: 'origin' }); } });
+  await s.F.fetch(s.store);
+  assert.ok(s.dialogs[0].opts.message.includes("(ssh-keygen -R '[192.0.2.7]:2222')"), s.dialogs[0].opts.message);
+  const view = (platform, o) => s.win.PLFlowKit.connectView({ kind: 'host-key', message: 'x', ssh: { ...ssh, ...o } }, { op: 'fetch', platform }).message;
+  assert.ok(view('win32').includes('(ssh-keygen -R "[192.0.2.7]:2222")'), 'double quotes work in PowerShell and cmd');
+  assert.ok(view('win32', { keyName: undefined, host: 'h', port: 2222 }).includes('(ssh-keygen -R "[h]:2222")'));
+  assert.ok(view('darwin', { keyName: 'github.com' }).includes('(ssh-keygen -R github.com)'), 'a plain name, unquoted');
+  assert.ok(view('linux', { keyName: undefined, host: '[::1]', port: 2222 }).includes("(ssh-keygen -R '[::1]:2222')"));
 });
 
 test('the ssh -T command: no host (several push URLs) and an IDN host in its ASCII form', async () => {

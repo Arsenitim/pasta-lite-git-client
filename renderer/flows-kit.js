@@ -47,8 +47,8 @@
 //   isRunning(store) -> boolean  a flow of this store is in progress
 //   shortcutFor(keydown, state, ctx), shortcutBlocked(keydown, state, ctx)   PLPolicy's (the global shortcuts)
 // Kit (window.PLFlowKit): C, flow, settle, report, dialog, dn, short, Op, status, currentBranch,
-// localBranches, upstreamOf, keptStashTitle, keptStashText, stashNote, reportOutcome, authAlert,
-// authMessage and connectView (also the clone dialog's, renderer/clone.js), connectAlert, tagConflictsAlert,
+// localBranches, upstreamOf, keptStashTitle, keptStashText, stashNote, reportOutcome, authMessage and
+// connectView (also the clone dialog's, renderer/clone.js), connectAlert, CONNECT_KINDS, tagConflictsAlert,
 // register; flows-sync.js adds forcePush, flows-branch.js checkoutInner and syntaxError, flows-op.js its
 // start helpers.
 // All git-derived text reaches the DOM through the dialogs / toasts (textContent only).
@@ -234,26 +234,36 @@
   // never run.
 
   const SshText = () => window.PLSshText; // ../src/ssh-text.js, loaded before components.js
-  const CONNECT_KINDS = new Set(['auth', 'host-key', 'not-found', 'unreachable']);
+  // The kinds connectAlert explains (the remote ops' write() calls keep them quiet: flows-sync.js).
+  const CONNECT_KINDS = Object.freeze(['auth', 'host-key', 'not-found', 'unreachable']);
   const OP_NAMES = { fetch: 'Fetch', pull: 'Pull', push: 'Push', clone: 'Clone' };
 
   // W6 gate (docs/plans/ssh-remote-errors.md §4.5 and §10 Q9): the Windows hint recommends Windows'
   // own OpenSSH as core.sshCommand only once manual QA row W6 showed that it doesn't hang after a
-  // successful connection. Until then this stays false and the hint names the ssh-agent service
-  // and Pageant only; set it to true (and update the hint's test in test/flows.test.js) when W6 passes.
+  // successful connection. Until then this stays false: the hint leads with Pageant (what works
+  // with Git for Windows' own ssh in an app started from the Start menu) and gives the ssh-agent
+  // service's steps only to those whose git runs Windows' OpenSSH already. Set it to true (and
+  // update the hint's test in test/flows.test.js) when W6 passes.
   const RECOMMEND_WINDOWS_OPENSSH = false;
-  const WINDOWS_OPENSSH = ', and let git use Windows\' OpenSSH: git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe';
+  const SERVICE_STEPS = 'its ssh-agent service is disabled by default. In an administrator PowerShell: Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent, then ssh-add';
 
-  /** How to put a key into ssh-agent on `platform`, so ssh can use it without asking. */
+  /**
+   * How to make the key usable without a prompt on `platform`. Windows: Git for Windows' own ssh
+   * (the default) uses neither Windows' ssh-agent service nor an agent started in a Git Bash or
+   * by start-ssh-agent.cmd (that one serves its own console's session only), so a passphrase key
+   * needs Pageant and plink there; the service serves Windows' OpenSSH.
+   */
   function sshAgentHint(platform, { windowsOpenSsh = RECOMMEND_WINDOWS_OPENSSH } = {}) {
     if (platform === 'darwin') {
       return 'On macOS: ssh-add --apple-use-keychain ~/.ssh/<key>, and in ~/.ssh/config UseKeychain yes and AddKeysToAgent yes, so the key comes back after a restart.';
     }
     if (platform === 'win32') {
-      return 'Git for Windows\' own ssh doesn\'t use Windows\' ssh-agent service, which serves Windows\' OpenSSH. '
-        + 'The service is disabled by default; to use it, in an administrator PowerShell: '
-        + `Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent, then ssh-add${windowsOpenSsh ? WINDOWS_OPENSSH : ''}.\n\n`
-        + 'Or load the key in PuTTY\'s Pageant and set GIT_SSH to plink; restart Pasta Lite after setting GIT_SSH (it reads its environment when it starts).';
+      const openSsh = windowsOpenSsh
+        ? `Or let git use Windows' OpenSSH and its ssh-agent service: git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe; ${SERVICE_STEPS}.`
+        : `If git runs Windows' own OpenSSH (core.sshCommand or GIT_SSH_COMMAND names it, or Git for Windows was installed with "Use external OpenSSH"): ${SERVICE_STEPS}.`;
+      return 'Git for Windows\' own ssh can\'t use a key that needs its passphrase here, and it doesn\'t use Windows\' ssh-agent service. '
+        + 'Load the key in PuTTY\'s Pageant and set the GIT_SSH environment variable to PuTTY\'s plink.exe; restart Pasta Lite after setting it (it reads its environment when it starts).'
+        + `\n\n${openSsh}`;
     }
     return 'Add it with ssh-add ~/.ssh/<key> in the session Pasta Lite was started from (it needs that session\'s SSH_AUTH_SOCK).';
   }
@@ -270,14 +280,25 @@
   /** The `ssh -T` command for `ssh` ({host, port, user}); `ssh -T git@<host>` without a host. */
   const sshCommandText = (ssh) => (ssh && ssh.host ? dn(SshText().sshCommand({ ...ssh, host: ascii(ssh.host) })) : 'ssh -T git@<host>');
 
-  /** `ssh-keygen -R` of the saved key: `'[host]:port'` with a port other than 22 (how ssh saves it). */
-  function keygenText(ssh) {
-    const host = ssh && ssh.host ? dn(ascii(ssh.host).replace(/^\[(.*)\]$/, '$1')) : '<host>';
-    return ssh && ssh.port && ssh.port !== 22 ? `ssh-keygen -R '[${host}]:${ssh.port}'` : `ssh-keygen -R ${host}`;
+  /**
+   * `ssh-keygen -R` of the saved key: the known_hosts name ssh printed (`ssh.keyName`: the resolved
+   * host, '[host]:port'), else the URL's host, '[host]:port' with a port other than 22 (how ssh
+   * saves it). A bracketed name is quoted: single quotes for a POSIX shell, double quotes on
+   * Windows (they work in PowerShell and in cmd).
+   */
+  function keygenText(ssh, platform) {
+    let name = '<host>';
+    if (ssh && ssh.keyName) name = dn(ssh.keyName);
+    else if (ssh && ssh.host) {
+      const host = dn(SshText().unbracket(ascii(ssh.host)));
+      name = ssh.port && ssh.port !== 22 ? `[${host}]:${ssh.port}` : host;
+    }
+    const q = platform === 'win32' ? '"' : "'";
+    return `ssh-keygen -R ${name.startsWith('[') ? `${q}${name}${q}` : name}`;
   }
 
-  // git's own https prompt falls back to SSH_ASKPASS (Windows: Git for Windows' false.exe, src/ssh-env.js):
-  // its line is left in the error and dropped only where it is shown.
+  // git's own https prompt falls back to SSH_ASKPASS when one is set (docs/plans/ssh-remote-errors.md
+  // V12), and the askpass may fail: its line is left in the error and dropped only where it is shown.
   const ASKPASS_LINE = /^error: unable to read askpass response from .*(?:\r?\n|$)/gm;
   const shownDetail = (text) => String(text || '').replace(ASKPASS_LINE, '').trim();
   const firstLine = (text) => String(text || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
@@ -291,7 +312,7 @@
           return {
             title: 'The server\'s host key changed',
             message: `${host} now presents a different key than the one saved for it. Someone may be intercepting the connection, or the server was reinstalled. `
-              + `Check the key${ssh.fingerprint ? ` (${dn(ssh.fingerprint)})` : ''} with the server's admin or its published fingerprints before you remove the saved one (${keygenText(ssh)}).`,
+              + `Check the key${ssh.fingerprint ? ` (${dn(ssh.fingerprint)})` : ''} with the server's admin or its published fingerprints before you remove the saved one (${keygenText(ssh, platform)}).`,
           };
         }
         return { title: 'Unknown host key', message: `ssh doesn't know ${host} yet and can't ask here. Connect once from a terminal (${sshCommandText(ssh)}) to check its key and accept it, then try again.` };
@@ -351,11 +372,12 @@
    * notice), and for a 'not-found' that names no remote (not the remote's: fetch and push set `remote`).
    */
   async function connectAlert(store, e, { op } = {}) {
-    if (saidOf(e) && connectView(e, { op })) {
-      await dialog(store).alert(connectView(e, { op }));
+    const said = saidOf(e) ? connectView(e, { op }) : null;
+    if (said) {
+      await dialog(store).alert(said);
       return true;
     }
-    if (!e || !CONNECT_KINDS.has(e.kind)) return false;
+    if (!e || !CONNECT_KINDS.includes(e.kind)) return false;
     if (e.kind === 'not-found' && op !== 'clone' && !e.remote) return false;
     if (e.kind === 'unreachable' && (op === 'fetch' || op === 'pull')) {
       report(store, Object.assign(new Error(unreachableText(e)), { kind: e.kind }));
@@ -364,9 +386,6 @@
     await dialog(store).alert(connectView(e, { op }));
     return true;
   }
-
-  /** The 'auth' failure `e` of remote op `op`: connectView's dialog. */
-  const authAlert = (store, e, op) => dialog(store).alert(connectView(e, { op }));
 
   async function tagConflictsAlert(store, res) {
     const tags = (res && res.tagConflicts) || [];
@@ -445,7 +464,7 @@
   // What the other flow files build on (they add their flows to PLFlows, and their shared helpers here).
   window.PLFlowKit = {
     C, flow, settle, report, dialog, dn, short, Op, status, currentBranch, localBranches, upstreamOf,
-    keptStashTitle, keptStashText, stashNote, reportOutcome, authAlert, authMessage, connectView, connectAlert, tagConflictsAlert,
+    keptStashTitle, keptStashText, stashNote, reportOutcome, authMessage, connectView, connectAlert, CONNECT_KINDS, tagConflictsAlert,
     /** Add flows to window.PLFlows: {name: body} (bodies as for flow(); PLPolicy.FREE_FLOWS skip the guard). */
     register(bodies) {
       for (const [name, body] of Object.entries(bodies)) window.PLFlows[name] = flow(name, body);
