@@ -122,19 +122,16 @@ async function sshOf(cwd, remote, kind, facts, o) {
 }
 
 /**
- * A remote command's run options under an ssh watch: {watch, opts, ms}. git's stderr goes to the
- * watch; with a timer (`stallMs`, default defaultStallMs(): Windows only) git runs under the op's
- * signal and the watch's own abort combined, so a stall ends git through the Cancel path
- * (spawnGit's kill, signalGroup). Without a signal (a test) the stall alone can end it. On
- * Windows the askpass variables too (askpassEnv).
+ * A remote command's run options under an ssh watch: {watch, opts}. git's stderr goes to the
+ * watch; with a timer (`stallMs`, default defaultStallMs(): Windows only) git runs under
+ * watch.signalFor(the op's signal), so a stall ends git through the Cancel path (spawnGit's kill,
+ * signalGroup). Without a signal (a test) the stall alone can end it. On Windows the askpass
+ * variables too (askpassEnv).
  */
 function watched({ signal, timeout, stallMs }) {
-  const ms = stallMs === undefined ? defaultStallMs() : stallMs;
-  const stall = new AbortController();
-  const watch = createSshWatch({ stallMs: ms, onStall: () => stall.abort() });
-  const opts = { ...remoteOpts({ signal, timeout }), env: askpassEnv(), onStderr: (c) => watch.chunk(c) };
-  if (ms) opts.signal = AbortSignal.any([signal, stall.signal].filter(Boolean));
-  return { watch, opts, ms };
+  const watch = createSshWatch({ stallMs: stallMs === undefined ? defaultStallMs() : stallMs });
+  const opts = { ...remoteOpts({ signal, timeout }), signal: watch.signalFor(signal), env: askpassEnv(), onStderr: (c) => watch.chunk(c) };
+  return { watch, opts };
 }
 
 /** True for a user's cancel: kind 'aborted' with the op's own signal aborted (not a stall). */

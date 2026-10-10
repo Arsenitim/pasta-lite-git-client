@@ -188,9 +188,7 @@ async function cloneRepo({ source, parent, name, onProgress, onMade, signal, pla
 
   const parser = createProgressParser();
   const progress = throttle(onProgress);
-  const ms = stallMs === undefined ? defaultStallMs() : stallMs;
-  const stall = new AbortController();
-  const watch = createSshWatch({ stallMs: ms, onStall: () => stall.abort() });
+  const watch = createSshWatch({ stallMs: stallMs === undefined ? defaultStallMs() : stallMs });
   const onStderr = (chunk) => {
     watch.chunk(chunk);
     for (const p of parser.feed(chunk)) progress.offer(p);
@@ -199,7 +197,7 @@ async function cloneRepo({ source, parent, name, onProgress, onMade, signal, pla
     // cwd: the new, empty target (absolute in the argv too), never the parent. With the watchdog's
     // timer, git runs under the op's signal and the watch's abort combined (the Cancel path).
     await gitAt(target, [...(localFixtures ? FIXTURE_ARGS : CLONE_ARGS), 'clone', '--progress', '--no-recurse-submodules', '--', source, target], {
-      signal: ms ? AbortSignal.any([signal, stall.signal].filter(Boolean)) : signal, env: askpassEnv(), onStderr, maxBytes: MAX_CLONE_OUTPUT,
+      signal: watch.signalFor(signal), env: askpassEnv(), onStderr, maxBytes: MAX_CLONE_OUTPUT,
     });
     watch.stop();
     for (const p of parser.end()) progress.offer(p);

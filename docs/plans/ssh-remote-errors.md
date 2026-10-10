@@ -953,6 +953,13 @@ Recorded while building S0–S3; none changes a decision of §1.2 or §10.
 - The "never on macOS / Linux", "the user's own SSH_ASKPASS reaches ssh" and "a commit's hook never
   sees ours" checks run on every platform (the fake's `env` mode), not on Windows CI only; the
   path and `force` are asserted on Windows, their absence elsewhere.
+- Review fixes, in S3's own commit so that S3 still reverts cleanly: the two lines S3 changed in
+  remote.js and clone.js now take git's signal from `watch.signalFor` (§12, review fixes); a
+  remote op's own hooks (`pre-push`, `reference-transaction`) inherit the askpass variables, which
+  `src/ssh-env.js` and SECURITY.md now say ("never other ops' hooks"); SECURITY.md's paragraph is
+  its own and says the behaviour is pending Windows QA, as does the changelog's entry; and
+  `askpassEnv`'s production path (no injection: `gitExecutable()`, the cache) has a test that runs
+  where Git for Windows is installed (Windows CI).
 
 ---
 

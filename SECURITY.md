@@ -61,15 +61,21 @@ always runs git with `core.fsmonitor=false` and `protocol.ext.allow=never`, so t
 (which runs its URL as a shell command) is always blocked, whatever the repository's config says.
 It keeps git out of submodules wherever a flag can (status, diffs, checkout, fetch and push). It
 never opens an editor or terminal prompt, and passes on only an allowlisted set of `GIT_*`
-environment variables. On Windows, fetch, pull, push and clone run ssh with `SSH_ASKPASS` set to
-Git for Windows' own `false.exe` (and `SSH_ASKPASS_REQUIRE=force`), unless you set an askpass
-yourself, so ssh fails instead of prompting on a console nobody can see. It never continues or skips a rebase whose remaining steps run commands
+environment variables. It never continues or skips a rebase whose remaining steps run commands
 (`exec` lines), whoever started it: only Abort is offered.
 Examples of vulnerabilities in this area:
 
 - a way for a repository's config or hooks to run a command without the prompt
 - a way to get past the prompt, or to reuse a trust decision for a different repository or
   different settings
+
+**ssh on Windows** (pending Windows QA: [docs/plans/ssh-remote-errors.md](docs/plans/ssh-remote-errors.md)
+§13). Fetch, pull, push and clone are set to run ssh with `SSH_ASKPASS` pointing at Git for
+Windows' own `false.exe` and `SSH_ASKPASS_REQUIRE=force`, so that ssh fails instead of prompting
+on a console nobody can see. They don't when you set `SSH_ASKPASS` or `SSH_ASKPASS_REQUIRE`
+yourself, or when git has no `false.exe` next to it (MinGit). The hooks git runs for those
+commands (such as `pre-push`) inherit the two variables; other operations and their hooks never
+get them.
 
 **Electron sandboxing.** Every page (the tab strip and each tab) runs with `contextIsolation`,
 `sandbox` and `webSecurity` on, with `nodeIntegration` off, and with a strict Content Security

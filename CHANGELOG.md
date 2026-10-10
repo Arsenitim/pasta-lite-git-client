@@ -87,7 +87,8 @@ On Windows:
   prints its error and then never exits, so fetch and push sat until their two-minute timeout and
   a clone until it was cancelled. They are meant to end about 10
   seconds after ssh's error, with its explanation.
-- Windows' own OpenSSH no longer waits for a key passphrase or a host-key answer on a console
+- **Pending Windows QA** (not yet verified on Windows, see docs/plans/ssh-remote-errors.md §13):
+  Windows' own OpenSSH should no longer wait for a key passphrase or a host-key answer on a console
   nobody can see: fetch, pull, push and clone give ssh Git for Windows' `false.exe` as its askpass,
   so ssh fails with its error (and the op ends with the explanation) instead of hanging. An askpass
   you set yourself (`SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`) is left alone; MinGit has no `false.exe`.

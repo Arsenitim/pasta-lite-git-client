@@ -12,8 +12,10 @@
 // askpassEnv({platform, env, gitExe, isFile, readFile}) -> {SSH_ASKPASS, SSH_ASKPASS_REQUIRE} | {}
 // Only on Windows; only when the user's environment sets neither variable (their own askpass
 // keeps working as before); only when the git in use has a false.exe (not MinGit). Applied by the
-// remote ops alone (src/remote.js fetch / push, src/clone.js): never commits, hooks or reads. P3a
-// (roadmap.md §3.5) later puts its askpass helper in place of false.exe, under the same rules.
+// remote ops alone (src/remote.js fetch / push, src/clone.js), so the hooks git runs for them
+// (pre-push, reference-transaction) inherit it too; never other ops (commits and their hooks,
+// reads). P3a (roadmap.md §3.5) later puts its askpass helper in place of false.exe, under the
+// same rules.
 const path = require('node:path');
 const { gitExecutable, msysShell } = require('./git-process');
 const { isRunnable } = require('./which');

@@ -52,3 +52,15 @@ test('nothing without a false.exe: MinGit (no sh.exe), or an sh.exe alone', () =
   assert.deepEqual(askpassEnv({ ...o, gitExe: `${GFW}\\cmd\\git.exe`, isFile: files(`${GFW}\\usr\\bin\\sh.exe`) }), {});
   assert.deepEqual(askpassEnv({ ...o, gitExe: 'C:\\elsewhere\\git.exe', isFile: gfw }), {}, 'git outside a Git for Windows layout');
 });
+
+test('the production path (no injection): the git every command runs, cached; Git for Windows\' false.exe on Windows, nothing elsewhere', { skip: process.platform === 'win32' && !require('../src/git-process').msysShell(require('../src/git-process').gitExecutable()) && 'no Git for Windows sh next to the git in use (MinGit)' }, () => {
+  const first = askpassEnv({ env: {} });
+  if (process.platform !== 'win32') {
+    assert.deepEqual(first, {});
+    return;
+  }
+  assert.match(first.SSH_ASKPASS, /^[A-Za-z]:\/.*\/usr\/bin\/false\.exe$/i, 'forward slashes, next to git\'s sh.exe');
+  assert.equal(first.SSH_ASKPASS_REQUIRE, 'force');
+  assert.deepEqual(askpassEnv({ env: {} }), first, 'the same answer from the cache');
+  assert.deepEqual(askpassEnv({ env: { SSH_ASKPASS: 'C:/mine.exe' } }), {}, 'the user\'s own still wins over the cache');
+});
