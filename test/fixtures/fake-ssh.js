@@ -19,6 +19,8 @@
 //   silent-hang     print nothing and never exit (the prompt hang)
 //   deny-then-serve print the publickey refusal, wait FAKE_SSH_DELAY ms, then serve (a wrapper
 //              that retries with another key and succeeds)
+//   env        write {askpass, askpassRequire} (SSH_ASKPASS / SSH_ASKPASS_REQUIRE as they reached
+//              ssh, or null) to FAKE_SSH_OUT, then serve
 // FAKE_SSH_OUT: a file it writes {printedAt} to (ms since the epoch) once its lines are out.
 // A "never exit" ends after two minutes anyway, so a failed test leaves nothing behind for long.
 // `-G` (git's ssh variant probe) exits 0. FAKE_SSH_PID: a file this process writes its pid to.
@@ -112,5 +114,9 @@ else if (mode === 'proxyjump-hang') {
   say(['git@jump.invalid: Permission denied (publickey).'], () => setTimeout(() => say(['Connection closed by UNKNOWN port 65535'], hang), DELAY));
 } else if (mode === 'silent-hang') hang();
 else if (mode === 'deny-then-serve') say(LINES.deny(), () => setTimeout(serve, DELAY));
+else if (mode === 'env') {
+  fs.writeFileSync(env.FAKE_SSH_OUT, JSON.stringify({ askpass: env.SSH_ASKPASS || null, askpassRequire: env.SSH_ASKPASS_REQUIRE || null }));
+  serve();
+}
 else if (LINES[mode]) fail(LINES[mode]());
 else fail([`fake-ssh: unknown mode ${mode}`], 1);

@@ -17,12 +17,14 @@
 // git's stderr also goes to an ssh watch (src/ssh-stall.js, docs/plans/ssh-remote-errors.md §4.3):
 // on Windows by default it ends a git whose ssh printed its error and then hangs, and the clone
 // fails with what ssh said (`stalled`) instead of waiting until the user cancels; a user's cancel
-// keeps ssh's line (`said`).
+// keeps ssh's line (`said`). On Windows ssh gets Git for Windows' false.exe as its askpass
+// (src/ssh-env.js), so it fails instead of prompting on a console nobody can see.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { gitAt, GitError, kindError, tagError } = require('./git-process');
 const { createSshWatch, defaultStallMs, saidOf } = require('./ssh-stall');
+const { askpassEnv } = require('./ssh-env');
 const { createProgressParser } = require('./clone-progress');
 const { nameError } = require('./clone-url');
 const gitErrors = require('./git-errors');
@@ -197,7 +199,7 @@ async function cloneRepo({ source, parent, name, onProgress, onMade, signal, pla
     // cwd: the new, empty target (absolute in the argv too), never the parent. With the watchdog's
     // timer, git runs under the op's signal and the watch's abort combined (the Cancel path).
     await gitAt(target, [...(localFixtures ? FIXTURE_ARGS : CLONE_ARGS), 'clone', '--progress', '--no-recurse-submodules', '--', source, target], {
-      signal: ms ? AbortSignal.any([signal, stall.signal].filter(Boolean)) : signal, onStderr, maxBytes: MAX_CLONE_OUTPUT,
+      signal: ms ? AbortSignal.any([signal, stall.signal].filter(Boolean)) : signal, env: askpassEnv(), onStderr, maxBytes: MAX_CLONE_OUTPUT,
     });
     watch.stop();
     for (const p of parser.end()) progress.offer(p);

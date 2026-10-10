@@ -321,3 +321,69 @@ test('Windows: a stall ends git\'s whole tree, the hanging ssh included (as a ca
   assert.ok(Date.now() - at < 5000 + SLACK);
   assert.deepEqual(await h.runningAfterKill(ids), [], 'the ssh is gone with git');
 });
+
+// ---------------------------------------------------------------- S3: Windows askpass (docs/plans/ssh-remote-errors.md §4.4)
+
+test('askpass: ssh gets Git for Windows\' false.exe with force on Windows only; never on macOS / Linux', async (t) => {
+  const r = sshRepo();
+  const out = outFile();
+  fakeSsh(t, 'env', { repo: r.remote, env: { FAKE_SSH_OUT: out } });
+  for (const k of ['SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE']) {
+    const saved = process.env[k];
+    delete process.env[k];
+    t.after(() => { if (saved !== undefined) process.env[k] = saved; });
+  }
+  await remote.fetch(r.local, { remote: 'origin', stallMs: 0 });
+  const seen = JSON.parse(fs.readFileSync(out, 'utf8'));
+  if (process.platform === 'win32') {
+    assert.match(seen.askpass, /^[A-Za-z]:\/.*\/usr\/bin\/false\.exe$/i, 'forward slashes');
+    assert.equal(seen.askpassRequire, 'force');
+  } else {
+    assert.deepEqual(seen, { askpass: null, askpassRequire: null });
+  }
+});
+
+test('askpass: the user\'s own SSH_ASKPASS reaches ssh as it is, with no force from us', async (t) => {
+  const r = sshRepo();
+  const out = outFile();
+  fakeSsh(t, 'env', { repo: r.remote, env: { FAKE_SSH_OUT: out, SSH_ASKPASS: 'C:/tools/my-askpass.exe' } });
+  const saved = process.env.SSH_ASKPASS_REQUIRE;
+  delete process.env.SSH_ASKPASS_REQUIRE;
+  t.after(() => { if (saved !== undefined) process.env.SSH_ASKPASS_REQUIRE = saved; });
+  await remote.push(r.local, { branch: 'main', stallMs: 0 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(out, 'utf8')), { askpass: 'C:/tools/my-askpass.exe', askpassRequire: null });
+});
+
+test('askpass: a commit\'s hook (not a remote op) never sees ours', async (t) => {
+  const { run } = require('../src/exec');
+  const dir = h.initRepo();
+  const out = path.join(h.tmpDir(), 'hook.txt');
+  for (const k of ['SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE']) {
+    const saved = process.env[k];
+    delete process.env[k];
+    t.after(() => { if (saved !== undefined) process.env[k] = saved; });
+  }
+  h.write(dir, '.git/hooks/pre-commit', `#!/bin/sh\nprintf '%s|%s' "\${SSH_ASKPASS:-none}" "\${SSH_ASKPASS_REQUIRE:-none}" > '${slashes(out)}'\n`);
+  fs.chmodSync(path.join(dir, '.git', 'hooks', 'pre-commit'), 0o755);
+  h.write(dir, 'x.txt', 'x\n');
+  await run(dir, ['add', 'x.txt']);
+  await run(dir, ['commit', '-q', '-m', 'x']);
+  assert.equal(fs.readFileSync(out, 'utf8'), 'none|none');
+});
+
+test('Windows: false.exe runs the way ssh starts it (a prompt with spaces, quotes and newlines) and fails silently', { skip: process.platform !== 'win32' && 'Windows: Git for Windows\' false.exe' }, () => {
+  const { execFileSync } = require('node:child_process');
+  const { askpassEnv } = require('../src/ssh-env');
+  const env = askpassEnv({ env: {} });
+  assert.ok(env.SSH_ASKPASS, 'Git for Windows has a false.exe next to its sh.exe');
+  let failed = null;
+  try {
+    execFileSync(env.SSH_ASKPASS, ["Enter passphrase for key 'C:\\Users\\a b\\.ssh\\id_ed25519':\n\"x\""], { windowsHide: true, stdio: 'pipe', timeout: 30000 });
+  } catch (e) {
+    failed = e;
+  }
+  assert.ok(failed, 'it fails');
+  assert.equal(failed.status, 1);
+  assert.equal(String(failed.stdout), '');
+  assert.equal(String(failed.stderr), '');
+});

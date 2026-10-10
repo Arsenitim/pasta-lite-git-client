@@ -9,6 +9,8 @@
 // (`ssh`, sshTarget). git's stderr goes to an ssh watch (src/ssh-stall.js): on Windows by default
 // it ends a git whose ssh printed its error and then hangs (Windows' OpenSSH on a pipe), and the
 // failure is reported as what ssh said (`stalled`); a user's cancel keeps ssh's line (`said`).
+// On Windows ssh gets Git for Windows' false.exe as its askpass (src/ssh-env.js), so it fails
+// instead of prompting on a console nobody can see.
 const { GitError, kindError, tagError, run, out, tryOut } = require('./exec');
 const { headState } = require('./repo-dirs');
 const { verify, remotes, upstreamOf } = require('./git-reads');
@@ -16,6 +18,7 @@ const { PREFIX, after, branchOf, fullBranch, isRefspecSafe } = require('./gitref
 const gitErrors = require('./git-errors');
 const { sshFacts, splitRemote, asciiHost } = require('./ssh-text');
 const { createSshWatch, defaultStallMs, saidOf } = require('./ssh-stall');
+const { askpassEnv } = require('./ssh-env');
 const { userOk } = require('./clone-url');
 const { logger } = require('./log');
 
@@ -118,13 +121,14 @@ async function sshOf(cwd, remote, kind, facts, o) {
  * A remote command's run options under an ssh watch: {watch, opts, ms}. git's stderr goes to the
  * watch; with a timer (`stallMs`, default defaultStallMs(): Windows only) git runs under the op's
  * signal and the watch's own abort combined, so a stall ends git through the Cancel path
- * (spawnGit's kill, signalGroup). Without a signal (a test) the stall alone can end it.
+ * (spawnGit's kill, signalGroup). Without a signal (a test) the stall alone can end it. On
+ * Windows the askpass variables too (askpassEnv).
  */
 function watched({ signal, timeout, stallMs }) {
   const ms = stallMs === undefined ? defaultStallMs() : stallMs;
   const stall = new AbortController();
   const watch = createSshWatch({ stallMs: ms, onStall: () => stall.abort() });
-  const opts = { ...remoteOpts({ signal, timeout }), onStderr: (c) => watch.chunk(c) };
+  const opts = { ...remoteOpts({ signal, timeout }), env: askpassEnv(), onStderr: (c) => watch.chunk(c) };
   if (ms) opts.signal = AbortSignal.any([signal, stall.signal].filter(Boolean));
   return { watch, opts, ms };
 }
