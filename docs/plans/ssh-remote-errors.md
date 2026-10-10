@@ -12,7 +12,8 @@ separate PR after #9)") records, together with §9.3, §13 Q5 and QA row 6 there
 Status: **plan**. Written 2026-10-10 on `fix/ssh-remote-errors`, branched from `main` at
 `76dbbc3` (the merge of PR #9, Clone Repository). Revised the same day after an expert review
 (findings C1, H1–H4, M1–M10, L1–L9; the decisions on its open questions are in §10). No code is
-changed by this document.
+changed by this document. **Built** the same day, S0–S4 on this branch (S3 in its own commits);
+where the build differs is §12, and the manual QA still to run (W6 first) is §13.
 
 **Sources.**
 - The code, read directly (file and line numbers below are from `76dbbc3`).
@@ -905,3 +906,35 @@ Recorded while building S0–S3; none changes a decision of §1.2 or §10.
 - A clone the watchdog ended never counts as a checkout failure (its text can't say so anyway).
 - `stalled` stays on the error in main (and in the log record's `kind`); it is not sent to the page,
   which shows a stalled failure as its kind (or git's text) like any other.
+
+---
+
+## 13. QA log
+
+The rows of §7.5, as a flow: steps and expected result there, observed and result here. Nothing
+below has run yet: the Windows box was off when S0–S3 were built, and no row is marked passed
+without being run. **W6 comes first.** Until it passes, `RECOMMEND_WINDOWS_OPENSSH` stays false
+(§12, S1); until W3, W4, W10, W11, W12 and W15 pass, S3's commit stays revertable on its own.
+
+| # | Steps (§7.5) | Expected | Observed | Result |
+|---|---|---|---|---|
+| CI | macOS, Ubuntu and Windows CI on the branch | green; on Windows the fake ssh's `serve` and `deny` (S0), every fake-ssh case, the tree test and the two askpass tests run, not skip | built and green on macOS only (git 2.51.2, Node 22) | pending |
+| W6 | Windows' OpenSSH as `core.sshCommand`, key in its agent, known host; Fetch, Pull, Push, Clone | all succeed in normal time | not run | pending |
+| W1 | bundled ssh, passphrase key not in an agent | ssh auth dialog within ~1 s, Windows hint, nothing left | not run | pending |
+| W2 | bundled ssh, unknown host | "Unknown host key" within ~1 s | not run | pending |
+| W16 | Windows' OpenSSH, S3 off, a refused key without passphrase | auth dialog ~10 s after ssh's line, `git.exe` alive during the wait, nothing left after | not run | pending |
+| W17 | Windows' OpenSSH, unreachable host | toast (Fetch) / dialog (Push) within ~10 s | not run | pending |
+| W3 | Windows' OpenSSH, S3 on, passphrase key not in its agent | auth dialog after ~10 s, no console window | not run | pending |
+| W4 | Windows' OpenSSH, S3 on, unknown host | "Unknown host key" after ~10 s, no console window | not run | pending |
+| W5 | S3 standing down (`SSH_ASKPASS_REQUIRE=never`) | the prompt hang as today; Cancel → "Fetch cancelled" | not run | pending |
+| W7 | as W16, Cancel within 10 s | "Fetch cancelled" with "ssh said: …" | not run | pending |
+| W8 | Windows' OpenSSH, changed host key | "The server's host key changed", fingerprint, no "accept" | not run | pending |
+| W9 | bundled ssh, network off | toast / dialog / "Can't reach the server" | not run | pending |
+| W10 | user's own `SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE` | the user's helper is called | not run | pending |
+| W11 | default install path (with a space), W3 and W1 | `false.exe` runs for both ssh flavours | not run | pending |
+| W12 | HTTPS with GCM; then close GCM's window | sign-in works; "Authentication failed" without the askpass line | not run | pending |
+| W15 | Git for Windows with "Use external OpenSSH": W6, W16, W3 | as with `core.sshCommand` | not run | pending |
+| W13 | PuTTY / TortoisePlink as `GIT_SSH` | works; TortoisePlink's own dialog | not run | pending |
+| W14 | Windows 10, OpenSSH 8.1, W3 | the prompt hang (recorded, expected) | not run | pending |
+| W18 | Copy Diagnostics after W1–W17 | no key path, URL credentials, home path or ssh lines | not run | pending |
+| M1–M8 | macOS rows of §7.5 | as listed there | not run | pending |

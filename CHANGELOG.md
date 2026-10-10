@@ -50,7 +50,21 @@ minor versions may contain breaking changes.
   testing on Windows 11 but has had little real use there: expect rough edges, and please report
   what you find. CI now runs the whole test suite on Windows too.
 
+### Changed
+
+- Fetch, Fetch All, Pull and Push explain a failed connection as Clone does: an unknown ssh host
+  key, a host key that **changed** (with the fingerprint the server sent and the `ssh-keygen -R`
+  command, never "accept"), a repository that isn't there, and a server that can't be reached (for
+  Fetch and Pull a notice naming the remote and git's line). An ssh authentication failure names
+  the user and host, the `ssh -T` command to check the key from a terminal, and how to add the key
+  to ssh-agent on your platform; "Too many authentication failures" gets its own advice. The
+  command uses the remote's host as configured (an alias stays an alias), and a host that isn't
+  ASCII is shown in the form ssh saves. Clone's dialog uses the same texts.
+
 ### Fixed
+
+- A cancelled fetch, pull, push or clone says what ssh had reported before the cancel (for example
+  "Permission denied (publickey)"), instead of only "cancelled".
 
 On Windows:
 
@@ -66,6 +80,11 @@ On Windows:
   connecting over ssh may have started a background agent (gpg-agent, an ssh connection master):
   it is stopped with the command and starts again when next needed.
 - Git and its helpers no longer flash a console window.
+- An ssh that had already failed no longer keeps a fetch, pull, push or clone waiting: Windows' own
+  OpenSSH (run when `core.sshCommand` or `GIT_SSH_COMMAND` names it, or when Git for Windows was
+  installed with "Use external OpenSSH") prints its error and then never exits, so fetch and push
+  sat until their two-minute timeout and a clone until it was cancelled. They now end about 10
+  seconds after ssh's error, with its explanation.
 - Git for Windows is found in its usual install folders (machine-wide or per user) when it isn't on
   the PATH.
 - NTFS aliases of `.git` (its 8.3 short name, trailing dots or spaces, alternate data streams) are
