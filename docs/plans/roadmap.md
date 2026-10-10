@@ -636,7 +636,11 @@ stashPush(message, {paths?}) -> …                        // extends the existi
   (`RISKY_CONFIG`, `src/git.js`).
 
 **Ops and errors.**
-- There are no new ops. `remoteOp` gains an `askpass` env scope.
+- There are no new ops. `remoteOp` gains an `askpass` env scope. That scope exists since
+  [ssh-remote-errors.md](ssh-remote-errors.md) S3 (`src/ssh-env.js askpassEnv`): on Windows,
+  fetch, push and clone set `SSH_ASKPASS` to Git for Windows' `false.exe` with
+  `SSH_ASKPASS_REQUIRE=force`, only when the user set neither variable. P3a replaces `false.exe`
+  with its helper and keeps those rules.
 - New kinds: `auth-cancelled`, which is quiet.
 - `auth` stays for a real failure. The flows retry once after a prompt-driven failure: git itself
   re-asks on a bad password.

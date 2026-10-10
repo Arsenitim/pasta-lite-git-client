@@ -907,6 +907,17 @@ Recorded while building S0–S3; none changes a decision of §1.2 or §10.
 - `stalled` stays on the error in main (and in the log record's `kind`); it is not sent to the page,
   which shows a stalled failure as its kind (or git's text) like any other.
 
+**S3 (its own commit, so it can be reverted alone if a W-row fails).**
+- `src/git-process.js` exports `gitExecutable` and `msysShell` (both existed; `msysShell` was in
+  `_internal`): `src/ssh-env.js` needs the git in use and its Git for Windows root. No behaviour of
+  the process layer changes. It uses `msysShell` directly, not the cached `msysShellOf`, whose
+  warning is about the cancel path and would be logged for MinGit on every first remote op.
+- `askpassEnv` caches its answer per git binary only when nothing is injected (tests inject
+  `isFile` / `readFile` and are never cached).
+- The "never on macOS / Linux", "the user's own SSH_ASKPASS reaches ssh" and "a commit's hook never
+  sees ours" checks run on every platform (the fake's `env` mode), not on Windows CI only; the
+  path and `force` are asserted on Windows, their absence elsewhere.
+
 ---
 
 ## 13. QA log

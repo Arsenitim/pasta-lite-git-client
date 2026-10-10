@@ -85,6 +85,10 @@ On Windows:
   installed with "Use external OpenSSH") prints its error and then never exits, so fetch and push
   sat until their two-minute timeout and a clone until it was cancelled. They now end about 10
   seconds after ssh's error, with its explanation.
+- Windows' own OpenSSH no longer waits for a key passphrase or a host-key answer on a console
+  nobody can see: fetch, pull, push and clone give ssh Git for Windows' `false.exe` as its askpass,
+  so ssh fails with its error (and the op ends with the explanation) instead of hanging. An askpass
+  you set yourself (`SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`) is left alone; MinGit has no `false.exe`.
 - Git for Windows is found in its usual install folders (machine-wide or per user) when it isn't on
   the PATH.
 - NTFS aliases of `.git` (its 8.3 short name, trailing dots or spaces, alternate data streams) are

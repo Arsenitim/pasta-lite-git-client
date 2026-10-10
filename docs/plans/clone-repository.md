@@ -1307,7 +1307,7 @@ macOS (M) and Windows 11 (W). Each item is run on both unless marked otherwise.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| SSH waiting on a hidden console on Windows (§9.3) | a clone that sits until cancelled | "Waiting…" + Cancel. QA row 6: the default ssh fails fast; only Windows' own OpenSSH (when the user sets it) hangs, and Cancel ends it; no BatchMode (§13 Q5). The follow-up ([ssh-remote-errors.md](ssh-remote-errors.md)) ends an ssh that printed its error and hangs about 10 s later and keeps ssh's line on a Cancel |
+| SSH waiting on a hidden console on Windows (§9.3) | a clone that sits until cancelled | "Waiting…" + Cancel. QA row 6: the default ssh fails fast; only Windows' own OpenSSH (when the user sets it) hangs, and Cancel ends it; no BatchMode (§13 Q5). The follow-up ([ssh-remote-errors.md](ssh-remote-errors.md)) ends an ssh that printed its error and hangs about 10 s later, keeps ssh's line on a Cancel, and (gated on its Windows QA) gives ssh Git for Windows' `false.exe` as its askpass so the prompt hang fails too |
 | Progress format changes across git versions | a stuck or wrong bar (the clone itself still works) | a closed phase set; unknown frames ignored; fixtures captured with 2.51.2; the minimum git is pinned (`src/gitcheck.js:14`) |
 | Removal failing on Windows after a hard kill (locked or read-only files) | a partial folder left | `maxRetries`; the identity check; pending entries retried at the next launch; `leftover` told to the user; the Windows CI test |
 | Very large clones (tens of GB) | long runs; long removals | no timeout; the quit guard asks and kills; removal is async and resumable |

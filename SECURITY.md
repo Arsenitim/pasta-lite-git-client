@@ -61,7 +61,9 @@ always runs git with `core.fsmonitor=false` and `protocol.ext.allow=never`, so t
 (which runs its URL as a shell command) is always blocked, whatever the repository's config says.
 It keeps git out of submodules wherever a flag can (status, diffs, checkout, fetch and push). It
 never opens an editor or terminal prompt, and passes on only an allowlisted set of `GIT_*`
-environment variables. It never continues or skips a rebase whose remaining steps run commands
+environment variables. On Windows, fetch, pull, push and clone run ssh with `SSH_ASKPASS` set to
+Git for Windows' own `false.exe` (and `SSH_ASKPASS_REQUIRE=force`), unless you set an askpass
+yourself, so ssh fails instead of prompting on a console nobody can see. It never continues or skips a rebase whose remaining steps run commands
 (`exec` lines), whoever started it: only Abort is offered.
 Examples of vulnerabilities in this area:
 

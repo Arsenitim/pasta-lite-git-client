@@ -308,7 +308,8 @@ Git runs in the Electron main process; the pages talk to it over IPC and never t
   `src/error-kinds.js`. The stall watchdog (`src/ssh-stall.js`: end a git whose ssh failed but
   never exits, Windows by default) is built in the callers, `src/remote.js` and `src/clone.js`, on
   `spawnGit`'s `onStderr` and an abort combined with the op's signal: the process layer knows
-  nothing about ssh.
+  nothing about ssh. On Windows those two also give ssh Git for Windows' `false.exe` as its
+  askpass (`src/ssh-env.js`), only when the user set none.
 - **`test/`** has one `node:test` file per area. Git-layer tests run against throwaway repos
   (`test/helpers.js`); renderer tests load the scripts with a fake `window` and DOM
   (`test/renderer-harness.js`).
