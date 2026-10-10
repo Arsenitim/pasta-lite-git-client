@@ -4,8 +4,8 @@
  * one-segment folder names main accepts.
  *
  * Pure. Works in Node (`require('./src/clone-url.js')`) and in the browser as a plain <script>
- * (exposes `window.PLCloneUrl`; index.html loads src/display-text.js and src/path-names.js before
- * it), like src/error-kinds.js. The page checks as the user types; main checks again before git
+ * (exposes `window.PLCloneUrl`; index.html loads src/display-text.js, src/path-names.js and
+ * src/ssh-text.js before it), like src/error-kinds.js. The page checks as the user types; main checks again before git
  * runs (src/clone.js, src/ops.js cloneCheck): the page's answer is a convenience only.
  *
  * parseCloneUrl(text) -> {ok: true, url, kind, host, port, user, path, display, notes}
@@ -17,18 +17,20 @@
  *   as typed in .git/config). `notes`: 'insecure' (http, git), 'user-in-url'.
  * deriveName(source, {platform}) -> the folder name git would derive ('' when none is usable).
  * nameError(name, {platform}) -> the message for a refused folder name, or null.
- * userOk(name) -> true for a user name the clone rules accept (main checks the user ssh names in
- *   its refusal with it before showing it in a command: src/remote.js).
+ * userOk(name) -> true for a user name the clone rules accept (src/ssh-text.js's one user rule,
+ *   re-exported: main checks the user ssh names in its refusal with it, src/remote.js).
  * deriveName and nameError take `{platform}`: process.platform under Node by default; the
  * renderer passes window.api.platform.
  */
-(function (exports, DisplayText, PathNames) {
+(function (exports, DisplayText, PathNames, SshText) {
   'use strict';
 
   const MAX_URL = 2048;
   const MAX_NAME_BYTES = 255;
   const { INVISIBLE, JOINERS, hasInvisible } = DisplayText;
   const { isDotGitName, DEVICE_NAME, WIN_INVALID_CHARS, defaultPlatform } = PathNames;
+  // A user name: never an option ('-oProxyCommand@h' would reach ssh as one), never token-shaped.
+  const { USER, tokenShaped, userOk } = SshText;
 
   const LOCAL = 'Enter a remote URL (https://…, ssh://…, git@host:…): a local path or file:// URL isn\'t cloned here';
   const refuse = (reason) => ({ ok: false, reason });
@@ -39,18 +41,9 @@
   // IDN names too), an IPv4 address or a bracketed IPv6 one. Nothing a shell would read: ssh puts
   // the host into a ProxyCommand's %h as it is (CVE-2023-51385), so ssh://h$(id)/r must not pass.
   const HOST = /^(?:\[[0-9A-Fa-f:.]+\]|[\p{L}\p{N}](?:[\p{L}\p{N}.-]*[\p{L}\p{N}])?)$/u;
-  // A user name: never an option ('-oProxyCommand@h' would reach ssh as one).
-  const USER = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,38}$/;
   const MAX_PORT = 65535;
   // An scp-like URL whose "host" is a scheme: https:/github.com/o/r or https:github.com/o/r.
   const SCHEME_AS_HOST = /^(?:https?|ssh|git|file)$/i;
-  // Known token prefixes (the shapes src/redact.js masks, and a few more hosts'), or a long run of
-  // letters and digits that mixes both (what a generated token looks like, not a person's name).
-  const TOKEN_PREFIX = /^(?:github_pat_|gh[pousr]_|glpat-|glptt-|hf_|npm_|pypi-|xox[abpr]-|(?:AKIA|ASIA)[0-9A-Z]{12})/;
-  const tokenShaped = (u) => TOKEN_PREFIX.test(u) || (/^[A-Za-z0-9]{24,}$/.test(u) && /[A-Za-z]/.test(u) && /\d/.test(u));
-
-  /** True for a user name that may be shown and used: USER's characters, and not token-shaped. */
-  const userOk = (name) => typeof name === 'string' && USER.test(name) && !tokenShaped(name);
 
   /** The refusal of a URL's userinfo (the part before '@'), or null when the user name may stay. */
   function userError(userinfo) {
@@ -219,4 +212,5 @@
   typeof module !== 'undefined' ? module.exports : (window.PLCloneUrl = {}), // NOSONAR(S1121): the CommonJS-or-window export idiom
   typeof module !== 'undefined' ? require('./display-text') : window.PLDisplayText,
   typeof module !== 'undefined' ? require('./path-names') : window.PLPathNames,
+  typeof module !== 'undefined' ? require('./ssh-text') : window.PLSshText,
 );

@@ -8,8 +8,8 @@
 //   deny       print ssh's publickey refusal (`<FAKE_SSH_WHO or git@fake.invalid>: Permission
 //              denied (publickey).`) and exit 255 (Git for Windows' bundled ssh)
 //   hostkey, unreachable, changed, too-many   print that failure's lines and exit 255: an unknown
-//              host key, a refused connection, a changed host key (with its fingerprint), ssh's
-//              "Too many authentication failures"
+//              host key, a refused connection, a changed host key (with its fingerprint, saved as
+//              FAKE_SSH_KEYNAME or fake.invalid), ssh's "Too many authentication failures"
 //   not-found  print GitHub's "ERROR: Repository not found." and exit 1
 //   deny-hang, hostkey-hang, unreachable-hang, changed-hang, kex-hang   print that failure's lines
 //              (with '\r\n', as Windows writes them; kex: "kex_exchange_identification: read:
@@ -63,7 +63,7 @@ const LINES = {
     'Please contact your system administrator.',
     'Add correct host key in /home/u/.ssh/known_hosts to get rid of this message.',
     'Offending ED25519 key in /home/u/.ssh/known_hosts:1',
-    'Host key for fake.invalid has changed and you have requested strict checking.',
+    `Host key for ${env.FAKE_SSH_KEYNAME || 'fake.invalid'} has changed and you have requested strict checking.`,
     'Host key verification failed.',
   ],
   'too-many': () => ['Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures', 'Disconnected from 192.0.2.1 port 22'],

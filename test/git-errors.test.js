@@ -187,10 +187,12 @@ test('auth: ssh\'s own user@host refusal and "Too many authentication failures";
     "error: unable to create 'x': Permission denied",
     'remote: Permission denied (publickey)',
     'hook: git@h: Permission denied (publickey).',
-    'Permission denied (publickey).',
+    ' Permission denied (publickey).',
   ]) {
     assert.equal(ge.kindFor(gitErr(text), ...ge.CONNECT_RULES), null, text);
   }
+  // Older and vendor ssh builds print the refusal without user@host: still ssh's own line.
+  assert.equal(ge.kindFor(gitErr('Permission denied (publickey).\r\nfatal: Could not read from remote repository.'), ...ge.CONNECT_RULES), 'auth');
 });
 
 test('unreachable: ssh\'s "No route to host" and "Host is down" too', () => {

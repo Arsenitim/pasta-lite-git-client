@@ -155,3 +155,59 @@ test('saidOf: ssh\'s line as a cancel carries it: no invisible characters, a tok
   assert.ok(saidOf({ kind: 'auth', line: 'x'.repeat(2000) }).line.length < SAID_MAX + 20);
   assert.equal(SAID_MAX, 300);
 });
+
+test('signalFor: with a timer, the op\'s signal and the watch\'s abort combined; without one, the op\'s signal as it is', () => {
+  const op = new AbortController();
+  const off = createSshWatch({ stallMs: 0 });
+  assert.equal(off.signalFor(op.signal), op.signal);
+  assert.equal(off.signalFor(undefined), undefined, 'no signal: the ambient one applies (spawnGit)');
+  let fire = null;
+  const on = createSshWatch({ stallMs: 500, setTimer: (fn) => { fire = fn; return 1; }, clearTimer: () => {} });
+  const s = on.signalFor(op.signal);
+  const alone = on.signalFor(undefined);
+  assert.equal(s.aborted, false);
+  on.chunk(Buffer.from(`${DENY}\n`));
+  fire();
+  assert.equal(s.aborted, true, 'the stall ends git');
+  assert.equal(alone.aborted, true, 'without an op signal, the stall alone');
+  assert.equal(op.signal.aborted, false, 'the op itself is not cancelled');
+  const user = new AbortController();
+  const both = createSshWatch({ stallMs: 500 }).signalFor(user.signal);
+  user.abort();
+  assert.equal(both.aborted, true, 'a user\'s cancel ends git too');
+});
+
+test('isStall: only the watch\'s own abort is a stall; a user\'s cancel landing as it fires wins; other kills and errors are none', () => {
+  const aborted = () => Object.assign(new Error('git was cancelled'), { kind: 'aborted' });
+  let fire = null;
+  const w = createSshWatch({ stallMs: 500, setTimer: (fn) => { fire = fn; return 1; }, clearTimer: () => {} });
+  assert.equal(w.isStall(aborted(), null), false, 'not fired');
+  w.chunk(Buffer.from(`${DENY}\n`));
+  fire();
+  const quiet = new AbortController();
+  assert.equal(w.isStall(aborted(), quiet.signal), true);
+  assert.equal(w.isStall(aborted(), undefined), true);
+  const user = new AbortController();
+  user.abort();
+  assert.equal(w.isStall(aborted(), user.signal), false, 'the user\'s cancel at the same moment wins');
+  assert.equal(w.isStall(Object.assign(new Error('git timed out'), { kind: 'timeout' }), quiet.signal), false);
+  assert.equal(w.isStall(new Error('exit 128'), quiet.signal), false, 'git ended by itself as the timer fired');
+  assert.equal(w.isStall(null, quiet.signal), false);
+});
+
+test('logStall: one warning with the op, the kind and the timer, never git\'s text', async (t) => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const h = require('./helpers');
+  const { logger } = require('../src/log');
+  const dir = h.tmpDir();
+  logger.configure({ dir, level: 'debug', mirror: false });
+  t.after(() => logger.configure({ dir: null, level: 'info' }));
+  createSshWatch({ stallMs: 10000 }).logStall('fetch', Object.assign(new Error(DENY), { kind: 'auth', stderr: DENY }));
+  await logger.flush();
+  const recs = fs.readFileSync(path.join(dir, 'main.log'), 'utf8').trim().split('\n').map(JSON.parse).filter((r) => /stalled/.test(r.msg));
+  assert.equal(recs.length, 1);
+  assert.equal(recs[0].level, 'warn');
+  assert.deepEqual([recs[0].op, recs[0].kind, recs[0].ms], ['fetch', 'auth', 10000]);
+  assert.ok(!JSON.stringify(recs).includes('Permission denied'));
+});

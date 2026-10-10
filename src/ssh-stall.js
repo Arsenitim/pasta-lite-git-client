@@ -4,14 +4,18 @@
 // said before a cancel, §4.2) and, with a timer, ends an ssh that has already failed but never
 // exits: Windows' own OpenSSH prints its error and then waits forever while its stderr is a pipe,
 // and git waits for it. Once a complete line is one of ssh's endings (SSH_ENDINGS) and nothing
-// follows on stderr for `stallMs`, onStall() runs: the caller aborts git through the op's own
-// cancel path and reports the failure ssh named. spawnGit stays unaware of ssh.
+// follows on stderr for `stallMs`, the watch aborts its own signal (and runs onStall): the caller
+// ran git under signalFor(the op's signal), so git ends through the op's own cancel path, and the
+// caller reports the failure ssh named (isStall). spawnGit stays unaware of ssh.
 //
-// createSshWatch({stallMs, onStall, setTimer, clearTimer}) -> {chunk(buf), lines(), text(), fired, stop()}
+// createSshWatch({stallMs, onStall, setTimer, clearTimer}) -> {chunk(buf), lines(), text(), fired,
+//   stop(), signalFor(signal), isStall(err, signal), logStall(op, err)}
 // defaultStallMs(platform) -> 10000 on Windows (where the hang is), 0 (no timer) elsewhere.
 // saidOf(facts) -> {kind, line}: what ssh said (sshFacts of the watch's lines), as a cancel's
-//   explanation carries it to the page (redacted, visible characters only, bounded). The watch's
-//   lines themselves never cross IPC or reach a log.
+//   explanation carries it to the page (redacted, visible characters only, bounded).
+// The watch's lines never reach a log (logStall records the kind and the timer only). They reach
+// the page only as git's own text does: after a stall the caller makes them the error's message,
+// the same stderr a failure that ends by itself carries as its message.
 //
 // The lines: bytes decoded as UTF-8 (a character split across chunks stays whole), split on '\n',
 // '\r\n' and a lone '\r' (git's progress frames); a trailing '\r' is held until the next byte, so a
@@ -24,6 +28,9 @@ const { StringDecoder } = require('node:string_decoder');
 const { SSH_ENDINGS } = require('./ssh-text');
 const { redactString } = require('./redact');
 const { INVISIBLE } = require('./display-text');
+const { logger } = require('./log');
+
+const log = logger.child('git');
 
 const STALL_MS = 10000; // ten times the bundled ssh's whole failed op (§4.3), a twelfth of the fetch timeout
 const MAX_LINES = 200;
@@ -40,8 +47,13 @@ const isEnding = (line) => SSH_ENDINGS.some((re) => re.test(line));
 /**
  * A watch over one git command's stderr (see the header). lines(): the last MAX_LINES complete
  * non-empty lines, each cut to MAX_LINE characters; text(): them joined by '\n', at most MAX_TEXT
- * characters (the last ones); fired: true once onStall ran; stop(): no timer from now on (git
- * exited). A listener that throws is ignored.
+ * characters (the last ones); fired: true once it fired; stop(): no timer from now on (git
+ * exited). signalFor(signal): what git runs under: with a timer, the op's `signal` and the watch's
+ * own abort combined (AbortSignal.any; without an op signal, a test, the watch's alone), else
+ * `signal` as it is. isStall(err, signal): true when the watch ended git (`err` the 'aborted' of
+ * its kill) and the user didn't (`signal` not aborted: a cancel at the same moment wins).
+ * logStall(op, err): the record of a stall (the kind and the timer, no text). A listener that
+ * throws is ignored.
  */
 function createSshWatch({ stallMs = 0, onStall = () => {}, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   const decoder = new StringDecoder('utf8');
@@ -51,6 +63,7 @@ function createSshWatch({ stallMs = 0, onStall = () => {}, setTimer = setTimeout
   let timer = null;
   let fired = false;
   let stopped = false;
+  const stall = new AbortController();
 
   const disarm = () => {
     if (timer === null) return;
@@ -61,6 +74,7 @@ function createSshWatch({ stallMs = 0, onStall = () => {}, setTimer = setTimeout
     timer = null;
     if (fired || stopped) return;
     fired = true;
+    stall.abort();
     try {
       onStall();
     } catch { /* the caller's bug never breaks the command */ }
@@ -97,6 +111,9 @@ function createSshWatch({ stallMs = 0, onStall = () => {}, setTimer = setTimeout
       stopped = true;
       disarm();
     },
+    signalFor: (signal) => (stallMs > 0 ? AbortSignal.any([signal, stall.signal].filter(Boolean)) : signal),
+    isStall: (err, signal) => fired && !!err && err.kind === 'aborted' && !(signal && signal.aborted),
+    logStall: (op, err) => log.warn('ssh stalled after its error; git was ended', { op, kind: (err && err.kind) || null, ms: stallMs }),
   };
 }
 

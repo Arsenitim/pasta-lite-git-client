@@ -16,7 +16,7 @@ const { headState } = require('./repo-dirs');
 const { verify, remotes, upstreamOf } = require('./git-reads');
 const { PREFIX, after, branchOf, fullBranch, isRefspecSafe } = require('./gitref');
 const gitErrors = require('./git-errors');
-const { sshFacts, splitRemote, asciiHost } = require('./ssh-text');
+const { sshFacts, splitRemote, asciiHost, unbracket } = require('./ssh-text');
 const { createSshWatch, defaultStallMs, saidOf } = require('./ssh-stall');
 const { askpassEnv } = require('./ssh-env');
 const { userOk } = require('./clone-url');
@@ -76,21 +76,25 @@ async function mirrorRemotes(cwd) {
 
 // The host ssh names in its refusal (the resolved HostName): shown as text only, never in a command.
 const SHOWN_HOST = /^[A-Za-z0-9._:[\]-]{1,253}$/;
-const unbracketed = (host) => host.replace(/^\[(.*)\]$/, '$1').toLowerCase();
+const sameHost = (a, b) => unbracket(a).toLowerCase() === unbracket(b).toLowerCase();
 
 /**
  * The ssh target of an 'auth' or 'host-key' failure of `remote`, for the message's `ssh -T`
- * command: {host?, port?, user?, shownAs?, changed?, fingerprint?}, or null when the remote's URL
- * is no ssh URL splitRemote can show (an https remote's auth text stays as it is). The host and the
- * port come from the URL git used (`remote get-url --all` applies insteadOf / pushInsteadOf),
- * never from ssh's line, which names the resolved host and no alias: that one is only shown, as
- * `shownAs`. Several URLs (pushurls): no host, the failing one can't be told apart. The user is
+ * command: {host?, port?, user?, shownAs?, changed?, fingerprint?, keyName?}, or null when the
+ * remote's URL is no ssh URL splitRemote can show (an https remote's auth text stays as it is).
+ * The host and the port come from the URL git used (`remote get-url` applies insteadOf /
+ * pushInsteadOf), never from ssh's line, which names the resolved host and no alias: that one is
+ * only shown, as `shownAs`. A fetch uses the remote's first URL, as git does; a push every push
+ * URL, and with several (pushurls) no host: the failing one can't be told apart. The user is
  * ssh's effective one (`facts.user`, which includes a User from ~/.ssh/config) when userOk accepts
- * it, else the URL's. `facts`: sshFacts of git's stderr, or null. Never rejects: no signal (a
- * cancel's explanation asks too), a 10 s timeout, and a broken config is no target.
+ * it and ssh named the URL's own host (with ProxyJump the refusal may be the jump host's, whose user
+ * is no target's), else the URL's (splitRemote: userOk too). A changed key's `keyName` is the
+ * known_hosts name ssh printed (the resolved host, '[host]:port'), which `ssh-keygen -R` needs.
+ * `facts`: sshFacts of git's stderr, or null. Never rejects: no signal (a cancel's explanation asks
+ * too), a 10 s timeout, and a broken config is no target.
  */
 async function sshTarget(cwd, remote, facts, { push = false } = {}) {
-  const raw = await tryOut(cwd, ['remote', 'get-url', ...(push ? ['--push'] : []), '--all', remote], { signal: null, timeout: 10000 })
+  const raw = await tryOut(cwd, ['remote', 'get-url', ...(push ? ['--push', '--all'] : []), remote], { signal: null, timeout: 10000 })
     .catch(() => null);
   const urls = String(raw || '').split('\n').map((u) => u.trim()).filter(Boolean);
   const split = urls.length === 1 ? splitRemote(urls[0]) : null;
@@ -100,13 +104,13 @@ async function sshTarget(cwd, remote, facts, { push = false } = {}) {
     ssh.host = split.host;
     if (split.port) ssh.port = split.port;
   }
-  const user = facts && userOk(facts.user) ? facts.user : split && split.user;
+  const named = facts && facts.host && SHOWN_HOST.test(facts.host) ? facts.host : null;
+  const user = split && named && sameHost(named, split.host) && userOk(facts.user) ? facts.user : split && split.user;
   if (user) ssh.user = user;
-  if (facts && facts.host && SHOWN_HOST.test(facts.host) && !(split && unbracketed(facts.host) === unbracketed(split.host))) {
-    ssh.shownAs = asciiHost(facts.host);
-  }
+  if (named && !(split && sameHost(named, split.host))) ssh.shownAs = asciiHost(named);
   if (facts && facts.changed) ssh.changed = true;
   if (facts && facts.fingerprint) ssh.fingerprint = facts.fingerprint;
+  if (facts && facts.keyName) ssh.keyName = facts.keyName;
   return ssh;
 }
 
@@ -137,13 +141,13 @@ function watched({ signal, timeout, stallMs }) {
 const userCancel = (err, signal) => !!err && err.kind === 'aborted' && !!signal && signal.aborted;
 
 /**
- * A stall made into the failure it is: git was ended by the watch (`watch.fired`) and not by the
- * user (a cancel at the same moment wins), so the error is git's text again (the watch's lines:
- * spawnGit replaced it with "git was cancelled"), unclassified and `stalled`, for the caller's
- * classification. Any other error is returned as it is.
+ * A stall made into the failure it is: git was ended by the watch and not by the user
+ * (watch.isStall: a cancel at the same moment wins), so the error is git's text again (the
+ * watch's lines: spawnGit replaced it with "git was cancelled"), unclassified and `stalled`, for
+ * the caller's classification. Any other error is returned as it is.
  */
 function unstall(err, watch, signal) {
-  if (!watch.fired || !(err instanceof GitError) || err.kind !== 'aborted' || (signal && signal.aborted)) return err;
+  if (!watch.isStall(err, signal) || !(err instanceof GitError)) return err;
   const text = watch.text();
   err.kind = undefined;
   err.stderr = text;
@@ -152,14 +156,11 @@ function unstall(err, watch, signal) {
   return err;
 }
 
-/** The log record of a stall (no text: the kind and the timer only). */
-const logStall = (op, err, ms) => log.warn('ssh stalled after its error; git was ended', { op, kind: err.kind || null, ms });
-
 /**
  * A user's cancel after ssh said why it failed: `said` {kind, line} (saidOf: redacted, at most 300
  * characters) and, for auth / host-key, the ssh target the explanation names.
  */
-async function withSaid(cwd, remote, err, facts, o) {
+async function cancelSaid(cwd, remote, err, facts, o) {
   if (!facts) return err;
   err.said = saidOf(facts);
   Object.assign(err, await sshOf(cwd, remote, facts.kind, facts, o));
@@ -168,11 +169,7 @@ async function withSaid(cwd, remote, err, facts, o) {
 
 /** `err` with the remote it failed on (`remote`), unless it names one already. */
 function withRemote(err, remote) {
-  if (err && typeof err === 'object' && err.remote === undefined) {
-    try {
-      err.remote = remote;
-    } catch { /* frozen */ }
-  }
+  if (err && typeof err === 'object' && err.remote === undefined) err.remote = remote;
   return err;
 }
 
@@ -190,7 +187,7 @@ async function fetchRemote(cwd, remote, opts, skipTags = []) {
     const positive = configured.length ? configured : [`+refs/heads/*:refs/remotes/${remote}/*`];
     refspecs = [...positive, ...skipTags.map((t) => `^refs/tags/${t}`)];
   }
-  const { watch, opts: runOpts, ms } = watched(opts);
+  const { watch, opts: runOpts } = watched(opts);
   try {
     // Never into submodules (their config and hooks are their own): on the command line, since
     // .gitmodules can turn fetch.recurseSubmodules back on per submodule.
@@ -205,9 +202,9 @@ async function fetchRemote(cwd, remote, opts, skipTags = []) {
     // worktree has that one checked out (git's message kept).
     const kind = gitErrors.kindFor(err, ...gitErrors.CONNECT_RULES, 'checkedOutElsewhere');
     if (kind) tagError(err, kind, await sshOf(cwd, remote, kind, facts));
-    if (err.stalled) logStall('fetch', err, ms);
+    if (err.stalled) watch.logStall('fetch', err);
     if (kind || err.stalled) throw err;
-    if (userCancel(err, opts.signal)) throw await withSaid(cwd, remote, err, facts);
+    if (userCancel(err, opts.signal)) throw await cancelSaid(cwd, remote, err, facts);
     const rejected = gitErrors.unclassified(err) ? gitErrors.rejectedFetchRefs(err.stdout) : [];
     const tags = rejected.map((r) => after(r, PREFIX.TAGS)).filter((t) => t !== null);
     const next = [...new Set([...skipTags, ...tags])];
@@ -272,7 +269,7 @@ async function push(cwd, { remote, branch, remoteBranch, force, signal, timeout,
   } else if (force) {
     forceArgs = ['--force'];
   }
-  const { watch, opts, ms } = watched({ signal, timeout, stallMs });
+  const { watch, opts } = watched({ signal, timeout, stallMs });
   try {
     // --recurse-submodules=no: never checks or pushes submodules (fetch, above).
     await run(cwd, ['push', '--porcelain', '--recurse-submodules=no', ...forceArgs, target, `refs/heads/${local}:refs/heads/${dst}`], opts)
@@ -282,8 +279,8 @@ async function push(cwd, { remote, branch, remoteBranch, force, signal, timeout,
     const facts = sshFacts(watch.lines());
     const c = gitErrors.unclassified(err) && gitErrors.classifyPush(err);
     if (c) tagError(err, c.kind, { ...c.extra, ...(await sshOf(cwd, target, c.kind, facts, { push: true })) });
-    else if (userCancel(err, signal)) await withSaid(cwd, target, err, facts, { push: true });
-    if (err.stalled) logStall('push', err, ms);
+    else if (userCancel(err, signal)) await cancelSaid(cwd, target, err, facts, { push: true });
+    if (err.stalled) watch.logStall('push', err);
     throw withRemote(err, target);
   }
   return { remote: target, branch: local, remoteBranch: dst, forced: force || false };
@@ -322,7 +319,4 @@ async function setUpstream(cwd, localBranch, remote, remoteBranch) {
   }
 }
 
-module.exports = {
-  REMOTE_TIMEOUT_MS, checkRemoteName, writesBranches, mirrorRemotes, fetch, push, setUpstream,
-  _internal: { sshTarget, unstall }, // exported for unit tests only
-};
+module.exports = { REMOTE_TIMEOUT_MS, checkRemoteName, writesBranches, mirrorRemotes, fetch, push, setUpstream };

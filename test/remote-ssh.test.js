@@ -13,8 +13,7 @@ const remote = require('../src/remote');
 const { pull } = require('../src/pull');
 const { cloneRepo } = require('../src/clone');
 
-const slashes = (p) => p.replace(/\\/g, '/');
-const { fakeSsh } = h;
+const { slashes, fakeSsh, printedAt } = h;
 
 /** A bare repository and a clone of it whose origin is the bare one over (fake) ssh: {remote, local, seed, url}. */
 function sshRepo() {
@@ -145,9 +144,38 @@ test('sshTarget: a remote with two push URLs has no host (the failing one can\'t
   const err = await failure(OPS.push(r));
   assert.equal(err.kind, 'auth');
   assert.equal(err.ssh.host, undefined);
-  assert.equal(err.ssh.user, 'git');
+  assert.equal(err.ssh.user, undefined, 'no URL to check ssh\'s user against');
+  assert.equal(err.ssh.shownAs, 'fake.invalid');
   assert.equal(fs.readFileSync(log, 'utf8').trim().split('\n').length, 1, 'ssh ran once: git never tried the second URL (V11)');
   assert.equal(h.git(second, 'for-each-ref').trim(), '', 'the second repository is unchanged');
+});
+
+test('sshTarget: a fetch uses the remote\'s first URL, as git does (several remote.<r>.url values)', async (t) => {
+  const r = sshRepo();
+  h.git(r.local, 'remote', 'set-url', '--add', 'origin', `git@second.invalid:${slashes(r.remote)}`);
+  fakeSsh(t, 'deny');
+  const err = await failure(OPS.fetch(r));
+  assert.deepEqual(err.ssh, { host: 'fake.invalid', user: 'git' });
+});
+
+test('sshTarget: ssh\'s user counts only for the URL\'s own host (ProxyJump: the jump host\'s refusal)', async (t) => {
+  const r = sshRepo();
+  fakeSsh(t, 'deny', { env: { FAKE_SSH_WHO: 'jumper@jump.invalid' } });
+  const err = await failure(OPS.fetch(r));
+  assert.deepEqual(err.ssh, { host: 'fake.invalid', shownAs: 'jump.invalid' });
+});
+
+test('a changed host key of an alias with a port: the known_hosts name ssh printed, for ssh-keygen -R (fetch, push and clone)', async (t) => {
+  fakeSsh(t, 'changed', { env: { FAKE_SSH_KEYNAME: '[192.0.2.7]:2222' } });
+  for (const [op, run] of Object.entries(OPS)) {
+    const r = sshRepo();
+    h.git(r.local, 'remote', 'set-url', 'origin', `git@fake-alias:${slashes(r.remote)}`);
+    const err = await failure(run(r));
+    assert.equal(err.kind, 'host-key', op);
+    assert.equal(err.ssh.changed, true, op);
+    assert.equal(err.ssh.keyName, '[192.0.2.7]:2222', op);
+    if (op !== 'clone') assert.equal(err.ssh.host, 'fake-alias', `${op}: the command keeps the alias`);
+  }
 });
 
 test('an https remote\'s auth failure has no ssh target (its text stays the credential helper one)', async () => {
@@ -171,13 +199,6 @@ test('an https remote\'s auth failure has no ssh target (its text stays the cred
 
 // ---------------------------------------------------------------- S2: the stall watchdog and what ssh said
 
-/** {printedAt} once the fake wrote FAKE_SSH_OUT (its lines are out), within 60 s. */
-async function printedAt(file) {
-  for (const t0 = Date.now(); !fs.existsSync(file) || !fs.readFileSync(file, 'utf8'); await new Promise((r) => setTimeout(r, 20))) {
-    assert.ok(Date.now() - t0 < 60000, 'the fake ssh never printed');
-  }
-  return JSON.parse(fs.readFileSync(file, 'utf8')).printedAt;
-}
 const outFile = () => path.join(h.tmpDir(), 'out.json');
 // The slack of the Windows cancel test (test/exec.test.js): a hard kill settles well within it.
 const SLACK = 10000;
@@ -193,13 +214,15 @@ for (const [mode, kind] of [['deny-hang', 'auth'], ['hostkey-hang', 'host-key'],
     assert.equal(err.kind, kind, err.message);
     assert.equal(err.stalled, true);
     assert.equal(err.remote, 'origin');
-    assert.ok(settled - at >= 450, `not before the silence: ${settled - at} ms`);
+    // FAKE_SSH_OUT is written once the lines are out, a moment after git may have read them.
+    assert.ok(settled - at >= 300, `not before the silence: ${settled - at} ms`);
     assert.ok(settled - at < 500 + SLACK, `${settled - at} ms`);
     assert.doesNotMatch(err.message, /git was cancelled/);
     if (mode === 'kex-hang') assert.match(err.message, /^kex_exchange_identification: read: Connection reset by peer$/m);
     if (mode === 'proxyjump-hang') {
       assert.match(err.message, /Connection closed by UNKNOWN port 65535/, 're-armed by the outer ending: fired after it');
       assert.equal(err.ssh.shownAs, 'jump.invalid');
+      assert.equal(err.ssh.user, undefined, 'the jump host\'s user is no target\'s');
     }
     if (mode === 'changed-hang') assert.equal(err.ssh.changed, true);
   });
@@ -265,21 +288,6 @@ test('said is redacted: a token-shaped user in ssh\'s line is masked', async (t)
   assert.ok(!err.said.line.includes(tokenish), err.said.line);
   assert.match(err.said.line, /\*\*\*@fake\.invalid: Permission denied/);
   assert.equal(err.ssh.user, undefined, 'and never the user of the command');
-});
-
-test('unstall: a user\'s cancel landing as the stall fires stays a cancel; only the watch\'s own abort is a stall', () => {
-  const { GitError, tagError } = require('../src/exec');
-  const { unstall } = remote._internal;
-  const fired = { fired: true, text: () => 'git@h: Permission denied (publickey).' };
-  const aborted = () => tagError(new GitError(['fetch'], null, 'git was cancelled', ''), 'aborted');
-  const user = new AbortController();
-  user.abort();
-  assert.equal(unstall(aborted(), fired, user.signal).kind, 'aborted', 'the user\'s cancel wins');
-  const e = unstall(aborted(), fired, new AbortController().signal);
-  assert.deepEqual([e.kind, e.stalled, e.message, e.stderr], [undefined, true, 'git@h: Permission denied (publickey).', 'git@h: Permission denied (publickey).']);
-  assert.equal(unstall(aborted(), { fired: false, text: () => '' }, null).kind, 'aborted', 'no stall: a kill of another kind');
-  const timeout = tagError(new GitError(['fetch'], null, 'git timed out', ''), 'timeout');
-  assert.equal(unstall(timeout, fired, null).kind, 'timeout');
 });
 
 test('no false kill: a wrapper that retries and succeeds within the window; a pre-push hook that prints ssh\'s line and goes on', async (t) => {

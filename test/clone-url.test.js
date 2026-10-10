@@ -191,11 +191,11 @@ test('nameError: one segment, not . / .., not too long, no .git; on Windows the 
   assert.equal(mac('GIT~1'), null);
 });
 
-test('the UMD file works as a plain browser script after display-text.js and path-names.js', () => {
+test('the UMD file works as a plain browser script after display-text.js, path-names.js and ssh-text.js', () => {
   const vm = require('node:vm');
   const window = {};
-  const ctx = vm.createContext({ window, TextEncoder });
-  for (const f of ['display-text.js', 'path-names.js', 'clone-url.js']) {
+  const ctx = vm.createContext({ window, TextEncoder, URL });
+  for (const f of ['display-text.js', 'path-names.js', 'ssh-text.js', 'clone-url.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8'), ctx);
   }
   assert.equal(window.PLCloneUrl.parseCloneUrl('git@host:o/r.git').kind, 'scp');

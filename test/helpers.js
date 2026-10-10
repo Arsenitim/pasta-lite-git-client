@@ -119,6 +119,7 @@ function hostileConfig(dir) {
   for (const [k, v] of Object.entries(cfg)) git(dir, 'config', k, v);
 }
 
+/** `p` with forward slashes (a Windows path in a URL or a shell command). */
 const slashes = (p) => p.replace(/\\/g, '/');
 const FAKE_SSH = path.join(__dirname, 'fixtures', 'fake-ssh.js');
 
@@ -145,6 +146,14 @@ function fakeSsh(t, mode, { env = {}, repo } = {}) {
       else process.env[k] = v;
     }
   });
+}
+
+/** {printedAt} of the fake ssh's FAKE_SSH_OUT `file` once it wrote it (its lines are out), within 60 s. */
+async function printedAt(file) {
+  for (const t0 = Date.now(); !fs.existsSync(file) || !fs.readFileSync(file, 'utf8'); await new Promise((r) => setTimeout(r, 20))) {
+    if (Date.now() - t0 >= 60000) throw new Error('the fake ssh never printed');
+  }
+  return JSON.parse(fs.readFileSync(file, 'utf8')).printedAt;
 }
 
 /**
@@ -195,5 +204,5 @@ process.on('exit', cleanup);
 
 module.exports = {
   tmpDir, globalConfig, git, initRepo, write, read, commitFile, repoWithRemote, bareWithWorktree, hostileConfig, cleanup,
-  fakeSsh, winProcesses, stillRunning, runningAfterKill,
+  slashes, fakeSsh, printedAt, winProcesses, stillRunning, runningAfterKill,
 };

@@ -75,9 +75,10 @@ const RULES = Object.freeze({
   },
   // Our rebase editor helper (src/rebase-editor.js) refused the todo or a message.
   helperRefused: { re: new RegExp(HELPER_REFUSED), from: 'both' },
-  // `git clone` (src/clone.js), tested against the progress parser's text lines only
-  // (src/clone-progress.js), anchored like auth. ssh ends every failure with "fatal: Could not read
-  // from remote repository.", so that line never decides: the one before it does.
+  // The connection rules (CONNECT_RULES: these two, auth and unreachable) and clone's own, tested
+  // against git's stderr of a fetch or push and against the progress parser's text lines of a
+  // clone (src/clone-progress.js), anchored like auth. ssh ends every failure with "fatal: Could
+  // not read from remote repository.", so that line never decides: the one before it does.
   // Not found: over http(s) and for a local path ("repository '<x>' not found / does not exist"),
   // from GitHub / GitLab over ssh, and from a plain upload-pack (file://, ssh to a path that isn't
   // a repository: "'<x>' does not appear to be a git repository").

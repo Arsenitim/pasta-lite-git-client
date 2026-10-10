@@ -152,7 +152,7 @@ const exists = (p) => fs.promises.lstat(p).then(() => true, () => false);
  * invalid-args, not-found (the parent is gone; the remote repository doesn't exist), exists,
  * no-access, no-space, path-too-long, auth, host-key, unreachable, unsupported, unsafe-repo,
  * aborted; none for a failure git explains in a way we don't classify. A host-key failure whose key
- * changed carries `ssh: {changed, fingerprint?}` (the page takes the host from the typed URL). A
+ * changed carries `ssh: {changed, fingerprint?, keyName?}` (the page takes the host from the typed URL). A
  * failure the watchdog ended is `stalled`; a user's cancel after ssh said why it failed has `said`.
  */
 async function cloneRepo({ source, parent, name, onProgress, onMade, signal, platform = process.platform, localFixtures = false, stallMs } = {}) {
@@ -212,10 +212,10 @@ async function cloneRepo({ source, parent, name, onProgress, onMade, signal, pla
     // checkout error is no checkout failure. Not a stall: the watch ended git, not the user (whose
     // cancel at the same moment still wins), and the failure is what ssh said.
     const cancelled = !!(signal && signal.aborted);
-    const stalled = watch.fired && !cancelled && err instanceof GitError && err.kind === 'aborted';
+    const stalled = watch.isStall(err, signal) && err instanceof GitError;
     if (!stalled && ((err && err.kind === 'aborted') || cancelled)) {
       const e = err && typeof err === 'object' ? tagError(err, 'aborted') : kindError('aborted', 'Clone cancelled');
-      throw withMade(cancelled ? withSaid(e, watch.lines()) : e, made);
+      throw withMade(cancelled ? cancelSaid(e, watch.lines()) : e, made);
     }
     const text = parser.lines().join('\n');
     if (!stalled && gitErrors.matches({ stderr: text }, 'checkoutFailed') && await exists(path.join(target, '.git'))) {
@@ -225,7 +225,7 @@ async function cloneRepo({ source, parent, name, onProgress, onMade, signal, pla
     const out = classified(err, text, watch.lines());
     if (stalled) {
       out.stalled = true;
-      log.warn('ssh stalled after its error; git was ended', { op: 'clone', kind: out.kind || null, ms });
+      watch.logStall('clone', out);
     }
     throw withMade(out, made);
   }
@@ -257,14 +257,17 @@ function withMade(err, made) {
 /** git's text lines without "Cloning into '<target>'...": our own target, not news. */
 const told = (text) => text.split('\n').filter((l) => !/^Cloning into /.test(l)).join('\n');
 
-/** {ssh: {changed, fingerprint?}} when ssh said the host key changed (`facts`: sshFacts), else {}. */
+/**
+ * {ssh: {changed, fingerprint?, keyName?}} when ssh said the host key changed (`facts`: sshFacts),
+ * else {}. keyName: the known_hosts name ssh printed, for `ssh-keygen -R`.
+ */
 function changedKey(facts) {
   if (!facts || !facts.changed) return {};
-  return { ssh: { changed: true, ...(facts.fingerprint ? { fingerprint: facts.fingerprint } : {}) } };
+  return { ssh: { changed: true, ...(facts.fingerprint ? { fingerprint: facts.fingerprint } : {}), ...(facts.keyName ? { keyName: facts.keyName } : {}) } };
 }
 
 /** A user's cancel `err` with what ssh said before it (`said`, from the watch's `lines`), if anything. */
-function withSaid(err, lines) {
+function cancelSaid(err, lines) {
   const facts = sshFacts(lines);
   if (facts) Object.assign(err, { said: saidOf(facts) }, facts.kind === 'host-key' ? changedKey(facts) : {});
   return err;

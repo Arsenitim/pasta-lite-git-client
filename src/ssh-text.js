@@ -12,22 +12,31 @@
  *   or a ref name can't fake one mid-line), each tolerating the '\r' of Windows' '\r\n'. `changed`
  *   (a host key that changed) is a fact, not a kind: its kind is 'host-key'.
  * SSH_ENDINGS: every SSH_LINES pattern plus the endings ssh prints that classify to nothing (the
- *   watchdog arms on them).
+ *   watchdog arms on them). A normal "Received disconnect … 11: Bye" is no ending.
  * TOO_MANY: the "Too many authentication failures" disconnect (an 'auth' line of its own).
- * sshFacts(lines) -> {kind, line, user, host, changed, fingerprint} | null.
+ * sshFacts(lines) -> {kind, line, user, host, changed, fingerprint, keyName} | null.
  * splitRemote(url) -> {host, port, user} | null: a lenient, shell-safe split of a configured remote.
  * sshCommand({host, port, user}) -> 'ssh -T [-p <port>] [<user>@]<host>'.
- * asciiHost(host) -> the host's ASCII (punycode) form.
+ * asciiHost(host) -> the host's ASCII (punycode) form; unbracket(host): an IPv6 host without '[]'.
+ * USER, tokenShaped(name), userOk(name): the one rule for a user name the app shows or keeps in a
+ *   URL (clone-repository.md §13 Q7; src/clone-url.js uses it too).
  */
 (function (exports) {
   'use strict';
 
+  // The starts of ssh's lines more than one pattern below is built from.
+  const RESOLVE = '^ssh: Could not resolve hostname';
+  const CONNECT = '^ssh: connect to host ';
+  const DISCONNECT = '^Received disconnect from ';
+
   const SSH_LINES = Object.freeze({
-    // ssh always names user@host before its refusal (the resolved HostName, never an alias or a
-    // port), so "(keyboard-interactive)" or "(password)" first match too.
+    // OpenSSH names user@host before its refusal (the resolved HostName, never an alias or a port),
+    // so "(keyboard-interactive)" or "(password)" first match too; older and vendor builds print
+    // the refusal alone. Either way the whole line, from its start.
     auth: Object.freeze([
       /^\S+@\S+: Permission denied \([a-z0-9@.,-]+\)\.?\r?$/m,
-      /^Received disconnect from .*: Too many authentication failures/m,
+      /^Permission denied \([a-z0-9@.,-]+\)\.?\r?$/m,
+      new RegExp(`${DISCONNECT}.*: Too many authentication failures`, 'm'),
     ]),
     'host-key': Object.freeze([/^Host key verification failed/m, /^No .* host key is known for/m]),
     changed: Object.freeze([
@@ -35,8 +44,8 @@
       /^Host key for \S+ has changed and you have requested strict checking/m,
     ]),
     unreachable: Object.freeze([
-      /^ssh: Could not resolve hostname/m,
-      /^ssh: connect to host .* (?:Connection refused|Operation timed out|Connection timed out|Network is unreachable|No route to host|Host is down)/m,
+      new RegExp(RESOLVE, 'm'),
+      new RegExp(`${CONNECT}.* (?:Connection refused|Operation timed out|Connection timed out|Network is unreachable|No route to host|Host is down)`, 'm'),
     ]),
   });
 
@@ -46,16 +55,22 @@
     /^Connection closed by /,
     /^Connection reset by /,
     /^Unable to negotiate with /,
-    /^Received disconnect from /,
-    /^ssh: connect to host /,
-    /^ssh: Could not resolve hostname /,
+    // Any disconnect but reason 11 (SSH2_DISCONNECT_BY_APPLICATION: a normal "Bye", which a
+    // successful fetch can print before a long silent transfer).
+    new RegExp(`${DISCONNECT}(?!.*:\\s?11:\\s)`),
+    // A connection that failed for a reason the unreachable rule doesn't name.
+    new RegExp(CONNECT),
   ]);
 
-  const TOO_MANY = SSH_LINES.auth[1];
+  const TOO_MANY = SSH_LINES.auth[2];
   // The kinds sshFacts reports, in SSH_LINES (`changed` is a fact of a 'host-key' failure).
   const KINDS = ['auth', 'host-key', 'unreachable'];
   const FINGERPRINT_LEAD = /^The fingerprint for the \S+ key sent by the remote host is\r?$/;
   const FINGERPRINT = /^(SHA256:[A-Za-z0-9+/]{43})\.?\r?$/;
+  const KEY_FOR = /^Host key for (\S+) has changed and you have requested strict checking/;
+  // The name ssh saved the key under (its known_hosts entry): the resolved host, '[host]:port'
+  // for a port other than 22. Shown in an `ssh-keygen -R` command, so nothing a shell would read.
+  const KEY_NAME = /^(?:[A-Za-z0-9._][A-Za-z0-9._-]*|\[[A-Za-z0-9._:-]+\](?::\d{1,5})?)$/;
   const PERMISSION_DENIED = ': Permission denied (';
 
   const any = (res, s) => res.some((re) => re.test(s));
@@ -64,20 +79,25 @@
    * What ssh said, from git's stderr `lines` (an array): `kind` and `line` of the last SSH_LINES
    * line ('auth', 'host-key' or 'unreachable'; the line without its '\r'); `user` and `host` from
    * an auth line's `user@host: ` prefix (raw: the caller checks them before any use); `changed`
-   * when ssh said the host key changed; `fingerprint` the key it was sent then ('SHA256:…', or
-   * null). null when no line is ssh's.
+   * when ssh said the host key changed; then `fingerprint`, the key it was sent ('SHA256:…'), and
+   * `keyName`, the known_hosts name of the saved key ('[127.0.0.1]:22222'; KEY_NAME only), each the
+   * FIRST after the warning: a later block (a server's banner can print anything) never replaces
+   * them; null when ssh said none. null when no line is ssh's.
    */
   function sshFacts(lines) {
     const list = Array.isArray(lines) ? lines.map((l) => String(l)) : [];
     let hit = null;
     let changed = false;
     let fingerprint = null;
+    let keyName = null;
     list.forEach((l, i) => {
       if (any(SSH_LINES.changed, l)) changed = true;
-      if (FINGERPRINT_LEAD.test(l)) {
+      if (changed && fingerprint === null && FINGERPRINT_LEAD.test(l)) {
         const m = FINGERPRINT.exec(list[i + 1] || '');
         if (m) fingerprint = m[1];
       }
+      const key = changed && keyName === null ? KEY_FOR.exec(l) : null;
+      if (key && KEY_NAME.test(key[1])) keyName = key[1];
       const kind = KINDS.find((k) => any(SSH_LINES[k], l));
       if (kind) hit = { kind, line: l.replace(/\r$/, '') };
     });
@@ -93,29 +113,43 @@
         host = who.slice(at + 1);
       }
     }
-    return { kind: hit.kind, line: hit.line, user, host, changed, fingerprint };
+    return { kind: hit.kind, line: hit.line, user, host, changed, fingerprint, keyName };
   }
 
+  // A user name the app shows or keeps in a URL (clone-repository.md §13 Q7): never an option
+  // ('-oProxyCommand@h' would reach ssh as one), nothing a shell would read.
+  const USER = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,38}$/;
+  // Known token prefixes (the shapes src/redact.js masks, and a few more hosts'), or a long run of
+  // letters and digits that mixes both (what a generated token looks like, not a person's name).
+  const TOKEN_PREFIX = /^(?:github_pat_|gh[pousr]_|glpat-|glptt-|hf_|npm_|pypi-|xox[abpr]-|(?:AKIA|ASIA)[0-9A-Z]{12})/;
+  const tokenShaped = (u) => TOKEN_PREFIX.test(u) || (/^[A-Za-z0-9]{24,}$/.test(u) && /[A-Za-z]/.test(u) && /\d/.test(u));
+  /** True for a user name that may be shown and used: USER's characters, and not token-shaped. */
+  const userOk = (name) => typeof name === 'string' && USER.test(name) && !tokenShaped(name);
+
   // What a remote's URL may hold to be shown (and copied into a command): a host name or an IPv4
-  // address (letters, digits, '.', '_', '-', never a leading '-'), or a bracketed IPv6 address; a
-  // port of 1-65535; a user of the same letters plus '+'. Nothing a shell would read.
-  const HOST = /^(?:[A-Za-z0-9._][A-Za-z0-9._-]*|\[[0-9A-Fa-f:.]+\])$/;
-  const USER = /^[A-Za-z0-9._+][A-Za-z0-9._+-]{0,63}$/;
+  // address (letters, digits, '.', '_', '-', never a leading '-'), or a bracketed IPv6 literal
+  // (two colons at least: '[cafe:22]' is no IPv6 address); a port of 1-65535. Nothing a shell
+  // would read.
+  const HOST = /^(?:[A-Za-z0-9._][A-Za-z0-9._-]*|\[(?=[^\]]*:[^\]]*:)[0-9A-Fa-f:.]+\])$/;
   const MAX_PORT = 65535;
 
-  /** {host, port, user} when every part may be shown, else null. */
+  /**
+   * {host, port, user} when the host and port may be shown, else null. A user outside USER's
+   * characters refuses the whole URL; a token-shaped one is left out (never shown).
+   */
   function parts(user, host, port) {
     if (!host || !HOST.test(host)) return null;
     if (user !== null && !USER.test(user)) return null;
     if (port !== null && port !== '' && (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > MAX_PORT)) return null;
-    return { host, port: port ? Number(port) : null, user };
+    return { host, port: port ? Number(port) : null, user: user !== null && userOk(user) ? user : null };
   }
 
   /**
    * A configured remote's URL split for display: `ssh://[user@]host[:port]/…` (also git+ssh://
    * and ssh+git://) or scp-like `[user@]host:path`. Not a validator: lenient where the clone
-   * parser is strict (`git@github_work:o/r.git`, `ssh://deploy+ci@host/r`), but null for anything
-   * it can't show safely, another scheme, or a local path (`C:/x`, `/x`).
+   * parser is strict (`git@github_work:o/r.git`), but null for anything it can't show safely,
+   * another scheme, a local path (`C:/x`, `/x`), or a bracketed scp host that isn't an IPv6
+   * literal (git reads `[host:port]:path` as a host and a port; it is refused here instead).
    */
   function splitRemote(url) {
     const s = String(url == null ? '' : url).trim();
@@ -140,11 +174,11 @@
   }
 
   /** The host as ssh takes it on a command line: an IPv6 address without its brackets. */
-  const bare = (host) => String(host).replace(/^\[(.*)\]$/, '$1');
+  const unbracket = (host) => String(host).replace(/^\[(.*)\]$/, '$1');
 
   /** `ssh -T [-p <port>] [<user>@]<host>`: the command that checks a connection from a terminal. */
   function sshCommand({ host, port, user } = {}) {
-    const target = `${user ? `${user}@` : ''}${bare(host)}`;
+    const target = `${user ? `${user}@` : ''}${unbracket(host)}`;
     return `ssh -T ${port ? `-p ${port} ` : ''}${target}`;
   }
 
@@ -170,4 +204,8 @@
   exports.splitRemote = splitRemote;
   exports.sshCommand = sshCommand;
   exports.asciiHost = asciiHost;
+  exports.unbracket = unbracket;
+  exports.USER = USER;
+  exports.tokenShaped = tokenShaped;
+  exports.userOk = userOk;
 })(typeof module !== 'undefined' ? module.exports : (window.PLSshText = {})); // NOSONAR(S1121): the CommonJS-or-window export idiom
