@@ -335,6 +335,37 @@ test('not-found: a dialog naming the remote; unreachable: a toast naming the rem
   assert.deepEqual(s.errors().map((e) => e.message), ['no such branch']);
 });
 
+test('a cancel after ssh said why it failed (said): the kind\'s explanation titled "<Op> cancelled"; without said, today\'s notice', async () => {
+  for (const [op, title] of [['fetch', 'Fetch cancelled'], ['pull', 'Pull cancelled'], ['push', 'Push cancelled']]) {
+    const said = { kind: 'auth', line: 'git@github.com: Permission denied (publickey).' };
+    let s = await setup({}, { [op]: () => { throw err('aborted', 'git was cancelled', { said, ssh: { host: 'github.com', user: 'git' }, remote: 'origin' }); } });
+    assert.equal(await s.F[op](s.store), false);
+    assert.equal(s.dialogs.length, 1, op);
+    assert.equal(s.dialogs[0].opts.title, title);
+    assert.match(s.dialogs[0].opts.message, /^git@github\.com didn't accept any of your SSH keys/);
+    assert.equal(s.dialogs[0].opts.detail, 'ssh said: git@github.com: Permission denied (publickey).');
+    assert.deepEqual(s.notices(), [], op);
+    assert.equal(s.errors().length, 0, op);
+    s = await setup({}, { [op]: () => { throw err('aborted', 'git was cancelled', { remote: 'origin' }); } });
+    await s.F[op](s.store);
+    assert.equal(s.dialogs.length, 0, op);
+    assert.deepEqual(s.notices(), [title], op);
+  }
+  // A changed host key said before the cancel: the changed-key text; an unreachable one is a dialog too.
+  let s = await setup({}, { fetch: () => { throw err('aborted', 'git was cancelled', { said: { kind: 'host-key', line: 'Host key verification failed.' }, ssh: { host: 'h', changed: true, fingerprint: FP } }); } });
+  await s.F.fetch(s.store);
+  assert.equal(s.dialogs[0].opts.title, 'Fetch cancelled');
+  assert.match(s.dialogs[0].opts.message, /^h now presents a different key/);
+  s = await setup({}, { fetch: () => { throw err('aborted', 'git was cancelled', { said: { kind: 'unreachable', line: 'ssh: connect to host h port 22: Connection refused' } }); } });
+  await s.F.fetch(s.store);
+  assert.equal(s.dialogs[0].opts.title, 'Fetch cancelled');
+  assert.equal(s.dialogs[0].opts.detail, 'ssh said: ssh: connect to host h port 22: Connection refused');
+  // ssh's line is shown as text, invisible characters made visible.
+  s = await setup({}, { fetch: () => { throw err('aborted', 'git was cancelled', { said: { kind: 'auth', line: 'x@h‮: Permission denied (publickey). <img src=x>' } }); } });
+  await s.F.fetch(s.store);
+  assert.equal(s.dialogs[0].opts.detail, 'ssh said: x@h\\u{202E}: Permission denied (publickey). <img src=x>');
+});
+
 test('the askpass line of git\'s own https prompt is dropped from a shown detail (the error itself is not rewritten)', async () => {
   const message = "error: unable to read askpass response from 'C:/Program Files/Git/usr/bin/false.exe'\nfatal: could not read Username for 'https://h': terminal prompts disabled";
   const e = err('auth', message, { remote: 'origin' });

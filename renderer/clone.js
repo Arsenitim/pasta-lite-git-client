@@ -109,7 +109,7 @@
       case 'not-found':
       case 'unreachable':
         if (err.state === 'parent') return { title: 'Choose another folder', message: text };
-        if (kit) return kit.connectView({ kind: err.kind, message: text, ssh: cloneSsh(req.url, err), said: err.said }, { op: 'clone' });
+        if (kit) return kit.connectView({ kind: err.kind, message: text, ssh: cloneSsh(req.url, err) }, { op: 'clone' });
         return { title: 'Clone failed', message: 'See Help → Show Logs for details.', detail: text };
       case 'exists':
         return { title: 'Folder already exists', message: `${text.replace(/\.$/, '')}. Choose another name or folder.` };
@@ -470,11 +470,20 @@
     }
   }
 
+  /** What ssh said before the user cancelled the clone (err.said), as connectView tells it; null without. */
+  function cancelView(err, req) {
+    const kit = window.PLFlowKit;
+    if (!kit || !err || err.kind !== 'aborted' || !err.said) return null;
+    return kit.connectView({ kind: 'aborted', message: err.message, ssh: cloneSsh(req.url, err), said: err.said }, { op: 'clone' });
+  }
+
   /** The outcome in dialogs (the progress modal was still showing). Resolves {back, stale} for Back. */
   async function settle({ req, opId, res, err, onError }) {
     if (err) {
       if (err.kind === 'aborted') {
-        notify(onError, 'Clone cancelled');
+        const said = cancelView(err, req);
+        if (said) await dialog().alert(said);
+        else notify(onError, 'Clone cancelled');
         return null;
       }
       const view = errorView(err, req);
@@ -495,7 +504,9 @@
   /** The outcome as a toast (the progress modal was forced shut by another dialog). */
   function background({ req, res, err, onError }) {
     if (err) {
-      if (err.kind === 'aborted') notify(onError, 'Clone cancelled');
+      const said = err.kind === 'aborted' ? cancelView(err, req) : null;
+      if (said) notify(onError, `Clone cancelled. ${said.detail}`);
+      else if (err.kind === 'aborted') notify(onError, 'Clone cancelled');
       else {
         const view = errorView(err, req);
         onError(Object.assign(new Error(`${view.title}: ${view.detail || view.message}`), { kind: err.kind }));
@@ -655,7 +666,7 @@
 
   const PLClone = {
     open, fromMenu, resume,
-    _internal: { formatBytes, formatRate, progressText, phaseLabel, errorView, nameState, joinShown, notesText, WAIT_MS }, // for unit tests only
+    _internal: { formatBytes, formatRate, progressText, phaseLabel, errorView, cancelView, nameState, joinShown, notesText, WAIT_MS }, // for unit tests only
   };
   window.PLClone = PLClone;
   if (typeof module !== 'undefined') module.exports = PLClone;

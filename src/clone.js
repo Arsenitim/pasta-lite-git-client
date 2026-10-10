@@ -14,10 +14,15 @@
 // user) and a 16 MiB output cap. A cancel wins over anything git printed; "Clone succeeded, but
 // checkout failed" is a result, not an error. Only the progress parser's text lines (never the
 // hundreds of progress frames) make the error's message, redacted: serializeError sends it as it is.
+// git's stderr also goes to an ssh watch (src/ssh-stall.js, docs/plans/ssh-remote-errors.md §4.3):
+// on Windows by default it ends a git whose ssh printed its error and then hangs, and the clone
+// fails with what ssh said (`stalled`) instead of waiting until the user cancels; a user's cancel
+// keeps ssh's line (`said`).
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { gitAt, GitError, kindError, tagError } = require('./git-process');
+const { createSshWatch, defaultStallMs, saidOf } = require('./ssh-stall');
 const { createProgressParser } = require('./clone-progress');
 const { nameError } = require('./clone-url');
 const gitErrors = require('./git-errors');
@@ -129,23 +134,26 @@ const exists = (p) => fs.promises.lstat(p).then(() => true, () => false);
  * Clone `source` into a new folder `name` in `parent`.
  * @param {{source: string, parent: string, name: string, onProgress?: (p: object) => void,
  *   onMade?: (made: {abs: string, dev: string, ino: string, born?: string}) => void, signal?: AbortSignal,
- *   platform?: string, localFixtures?: boolean}} o
+ *   platform?: string, localFixtures?: boolean, stallMs?: number}} o
  *   source: a URL parseCloneUrl accepted (the app's only source).
  *   localFixtures: tests only (local paths and file:// URLs of their fixtures; FIXTURE_ARGS). The
  *   runner's check picks the fields it passes, so no request can set it.
  *   onProgress: CloneProgress frames (src/clone-progress.js), throttled.
  *   onMade: the folder we created ({abs, dev, ino}: dev and ino as decimal strings, so they survive
  *   JSON), as soon as it exists.
- *   platform: default process.platform (tests pass 'win32' / 'darwin').
+ *   platform: default process.platform (tests pass 'win32' / 'darwin'); the name rules only.
+ *   stallMs: the ssh watchdog's silence after ssh's ending (default defaultStallMs(): 10 s on
+ *   Windows, off elsewhere; 0: off).
  * @returns {Promise<{status: 'done'|'checkout-failed', root: string, name: string,
  *   submodules: boolean, empty: boolean, message?: string}>}
  * Rejects with err.made set once the folder was created (the caller removes it). Kinds:
  * invalid-args, not-found (the parent is gone; the remote repository doesn't exist), exists,
  * no-access, no-space, path-too-long, auth, host-key, unreachable, unsupported, unsafe-repo,
  * aborted; none for a failure git explains in a way we don't classify. A host-key failure whose key
- * changed carries `ssh: {changed, fingerprint?}` (the page takes the host from the typed URL).
+ * changed carries `ssh: {changed, fingerprint?}` (the page takes the host from the typed URL). A
+ * failure the watchdog ended is `stalled`; a user's cancel after ssh said why it failed has `said`.
  */
-async function cloneRepo({ source, parent, name, onProgress, onMade, signal, platform = process.platform, localFixtures = false } = {}) {
+async function cloneRepo({ source, parent, name, onProgress, onMade, signal, platform = process.platform, localFixtures = false, stallMs } = {}) {
   const bad = nameError(name, { platform });
   if (bad) throw kindError('invalid-args', bad);
   if (typeof source !== 'string' || !source) throw kindError('invalid-args', 'No repository to clone');
@@ -178,27 +186,46 @@ async function cloneRepo({ source, parent, name, onProgress, onMade, signal, pla
 
   const parser = createProgressParser();
   const progress = throttle(onProgress);
-  const onStderr = (chunk) => { for (const p of parser.feed(chunk)) progress.offer(p); };
+  const ms = stallMs === undefined ? defaultStallMs() : stallMs;
+  const stall = new AbortController();
+  const watch = createSshWatch({ stallMs: ms, onStall: () => stall.abort() });
+  const onStderr = (chunk) => {
+    watch.chunk(chunk);
+    for (const p of parser.feed(chunk)) progress.offer(p);
+  };
   try {
-    // cwd: the new, empty target (absolute in the argv too), never the parent.
+    // cwd: the new, empty target (absolute in the argv too), never the parent. With the watchdog's
+    // timer, git runs under the op's signal and the watch's abort combined (the Cancel path).
     await gitAt(target, [...(localFixtures ? FIXTURE_ARGS : CLONE_ARGS), 'clone', '--progress', '--no-recurse-submodules', '--', source, target], {
-      signal, onStderr, maxBytes: MAX_CLONE_OUTPUT,
+      signal: ms ? AbortSignal.any([signal, stall.signal].filter(Boolean)) : signal, onStderr, maxBytes: MAX_CLONE_OUTPUT,
     });
+    watch.stop();
     for (const p of parser.end()) progress.offer(p);
     progress.stop();
   } catch (err) {
+    watch.stop();
     progress.stop(); // before anything awaited below: no held frame after the failure
     parser.end();
     // A cancel wins: spawnGit replaced git's text with "git was cancelled", and a cancelled git's
-    // checkout error is no checkout failure.
-    if ((err && err.kind === 'aborted') || (signal && signal.aborted)) {
-      throw withMade(err && typeof err === 'object' ? tagError(err, 'aborted') : kindError('aborted', 'Clone cancelled'), made);
+    // checkout error is no checkout failure. Not a stall: the watch ended git, not the user (whose
+    // cancel at the same moment still wins), and the failure is what ssh said.
+    const cancelled = !!(signal && signal.aborted);
+    const stalled = watch.fired && !cancelled && err instanceof GitError && err.kind === 'aborted';
+    if (!stalled && ((err && err.kind === 'aborted') || cancelled)) {
+      const e = err && typeof err === 'object' ? tagError(err, 'aborted') : kindError('aborted', 'Clone cancelled');
+      throw withMade(cancelled ? withSaid(e, watch.lines()) : e, made);
     }
     const text = parser.lines().join('\n');
-    if (gitErrors.matches({ stderr: text }, 'checkoutFailed') && await exists(path.join(target, '.git'))) {
+    if (!stalled && gitErrors.matches({ stderr: text }, 'checkoutFailed') && await exists(path.join(target, '.git'))) {
       return { status: 'checkout-failed', root: target, name, ...(await postSteps(target)), empty: false, message: redactString(told(text), MAX_MESSAGE) };
     }
-    throw withMade(classified(err, text), made);
+    if (stalled) err.kind = undefined; // spawnGit's "cancelled": classified below from git's lines
+    const out = classified(err, text, watch.lines());
+    if (stalled) {
+      out.stalled = true;
+      log.warn('ssh stalled after its error; git was ended', { op: 'clone', kind: out.kind || null, ms });
+    }
+    throw withMade(out, made);
   }
   if (testHooks.afterGit) await testHooks.afterGit();
   // The clone is complete: what follows runs without the signal, so a cancel landing now can't
@@ -228,11 +255,17 @@ function withMade(err, made) {
 /** git's text lines without "Cloning into '<target>'...": our own target, not news. */
 const told = (text) => text.split('\n').filter((l) => !/^Cloning into /.test(l)).join('\n');
 
-/** {ssh: {changed, fingerprint?}} when ssh said the host key changed (sshFacts of `lines`), else {}. */
-function changedKey(lines) {
-  const facts = sshFacts(lines);
+/** {ssh: {changed, fingerprint?}} when ssh said the host key changed (`facts`: sshFacts), else {}. */
+function changedKey(facts) {
   if (!facts || !facts.changed) return {};
   return { ssh: { changed: true, ...(facts.fingerprint ? { fingerprint: facts.fingerprint } : {}) } };
+}
+
+/** A user's cancel `err` with what ssh said before it (`said`, from the watch's `lines`), if anything. */
+function withSaid(err, lines) {
+  const facts = sshFacts(lines);
+  if (facts) Object.assign(err, { said: saidOf(facts) }, facts.kind === 'host-key' ? changedKey(facts) : {});
+  return err;
 }
 
 /**
@@ -240,14 +273,14 @@ function changedKey(lines) {
  * frames: the rules read them as stderr). Its message is always replaced, redacted and bounded:
  * git's lines (told), else the kill's own text (spawnGit's, which names no URL), else a plain one.
  * A GitError's own message would be git's whole stderr, or with none its command line, URL included.
- * A host key that changed is noted (`ssh`, changedKey).
+ * A host key that changed is noted (`ssh`, changedKey of the watch's `lines`; default: `text`'s).
  */
-function classified(err, text) {
+function classified(err, text, lines = String(text || '').split('\n')) {
   if (!(err instanceof GitError)) return err;
   const kill = err.kind ? err.message : '';
   err.stderr = text || '';
   gitErrors.classify(err, RULE_ORDER);
-  if (err.kind === 'host-key') Object.assign(err, changedKey(String(text || '').split('\n')));
+  if (err.kind === 'host-key') Object.assign(err, changedKey(sshFacts(lines)));
   err.message = redactString(told(text) || kill || 'git clone failed', MAX_MESSAGE);
   return err;
 }

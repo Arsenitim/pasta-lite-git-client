@@ -235,6 +235,7 @@
 
   const SshText = () => window.PLSshText; // ../src/ssh-text.js, loaded before components.js
   const CONNECT_KINDS = new Set(['auth', 'host-key', 'not-found', 'unreachable']);
+  const OP_NAMES = { fetch: 'Fetch', pull: 'Pull', push: 'Push', clone: 'Clone' };
 
   // W6 gate (docs/plans/ssh-remote-errors.md §4.5 and §10 Q9): the Windows hint recommends Windows'
   // own OpenSSH as core.sshCommand only once manual QA row W6 showed that it doesn't hang after a
@@ -322,25 +323,38 @@
     }
   }
 
+  /** What ssh said before the user cancelled `e` ({kind, line}: main's, redacted), or null. */
+  const saidOf = (e) => (e && e.kind === 'aborted' && e.said && typeof e.said.line === 'string' ? e.said : null);
+
   /**
    * What to tell the user about remote op `op`'s ('fetch', 'pull', 'push', 'clone') connection
    * failure `e` (kind in CONNECT_KINDS): {title, message, detail}, or null for another kind.
-   * detail: git's text, without the askpass line. `platform`: the agent hint's (default the app's).
+   * detail: git's text, without the askpass line. A user's cancel after ssh said why it failed
+   * (`e.said`) gets that kind's text, titled "<Op> cancelled", with "ssh said: <line>" as its
+   * detail. `platform`: the agent hint's (default the app's).
    */
   function connectView(e, { op, platform = C.util.PLATFORM } = {}) {
-    const view = e ? connectText(e.kind, e, e.ssh || null, { op, platform }) : null;
-    return view ? { ...view, detail: shownDetail(e.message) } : null;
+    const said = saidOf(e);
+    const view = e ? connectText(said ? said.kind : e.kind, e, e.ssh || null, { op, platform }) : null;
+    if (!view) return null;
+    if (said) return { ...view, title: `${OP_NAMES[op] || 'Operation'} cancelled`, detail: `ssh said: ${dn(said.line)}` };
+    return { ...view, detail: shownDetail(e.message) };
   }
 
   /** The toast of an unreachable fetch / pull: "Couldn't reach origin: <git's line>". */
   const unreachableText = (e) => `Couldn't reach ${e.remote ? dn(e.remote) : 'the remote'}: ${dn(firstLine(shownDetail(e.message)))}`;
 
   /**
-   * Show remote op `op`'s connection failure `e`: a dialog (connectView), or for an unreachable
-   * fetch or pull a toast naming the remote. Resolves false (nothing shown) for any other error,
-   * and for a 'not-found' that names no remote (not the remote's: fetch and push set `remote`).
+   * Show remote op `op`'s connection failure `e`, or a cancel after ssh said why it failed
+   * (`said`): a dialog (connectView), or for an unreachable fetch or pull a toast naming the
+   * remote. Resolves false (nothing shown) for any other error (a cancel without `said` keeps its
+   * notice), and for a 'not-found' that names no remote (not the remote's: fetch and push set `remote`).
    */
   async function connectAlert(store, e, { op } = {}) {
+    if (saidOf(e) && connectView(e, { op })) {
+      await dialog(store).alert(connectView(e, { op }));
+      return true;
+    }
     if (!e || !CONNECT_KINDS.has(e.kind)) return false;
     if (e.kind === 'not-found' && op !== 'clone' && !e.remote) return false;
     if (e.kind === 'unreachable' && (op === 'fetch' || op === 'pull')) {

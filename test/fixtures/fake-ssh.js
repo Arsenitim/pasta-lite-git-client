@@ -11,6 +11,16 @@
 //              host key, a refused connection, a changed host key (with its fingerprint), ssh's
 //              "Too many authentication failures"
 //   not-found  print GitHub's "ERROR: Repository not found." and exit 1
+//   deny-hang, hostkey-hang, unreachable-hang, changed-hang, kex-hang   print that failure's lines
+//              (with '\r\n', as Windows writes them; kex: "kex_exchange_identification: read:
+//              Connection reset by peer") and never exit (Windows' OpenSSH on a pipe)
+//   proxyjump-hang  a jump host's publickey refusal, FAKE_SSH_DELAY ms (default 300) later the
+//              outer ssh's "Connection closed by UNKNOWN port 65535", then never exit
+//   silent-hang     print nothing and never exit (the prompt hang)
+//   deny-then-serve print the publickey refusal, wait FAKE_SSH_DELAY ms, then serve (a wrapper
+//              that retries with another key and succeeds)
+// FAKE_SSH_OUT: a file it writes {printedAt} to (ms since the epoch) once its lines are out.
+// A "never exit" ends after two minutes anyway, so a failed test leaves nothing behind for long.
 // `-G` (git's ssh variant probe) exits 0. FAKE_SSH_PID: a file this process writes its pid to.
 // FAKE_SSH_LOG: a file it appends git's command to, one line per run.
 // The repository is the one in git's command ('<path>'), or FAKE_SSH_REPO when that is set: on
@@ -55,7 +65,23 @@ const LINES = {
     'Host key verification failed.',
   ],
   'too-many': () => ['Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures', 'Disconnected from 192.0.2.1 port 22'],
+  kex: () => ['kex_exchange_identification: read: Connection reset by peer'],
 };
+const DELAY = Number(env.FAKE_SSH_DELAY) || 300;
+
+/** Note when the lines are out (FAKE_SSH_OUT): the tests' timing starts there. */
+const printed = () => { if (env.FAKE_SSH_OUT) fs.writeFileSync(env.FAKE_SSH_OUT, JSON.stringify({ printedAt: Date.now() })); };
+
+/** Write `lines` to stderr ('\r\n'), then `then` once they are out. */
+function say(lines, then) {
+  process.stderr.write(lines.map((l) => `${l}\r\n`).join(''), then);
+}
+
+/** Never exit (until a kill, or two minutes as a safety net). */
+function hang() {
+  printed();
+  setTimeout(() => process.exit(255), 120000);
+}
 
 /** ssh's own words on stderr, then its exit code (once they are written: a pipe may be asynchronous). */
 function fail(lines, code = 255) {
@@ -78,7 +104,13 @@ function serve() {
   child.on('exit', (code) => process.exit(code === null ? 255 : code));
 }
 
+const hangs = /^(deny|hostkey|unreachable|changed|kex)-hang$/.exec(mode);
 if (mode === 'serve') serve();
 else if (mode === 'not-found') fail(['ERROR: Repository not found.'], 1);
+else if (hangs) say(LINES[hangs[1]](), hang);
+else if (mode === 'proxyjump-hang') {
+  say(['git@jump.invalid: Permission denied (publickey).'], () => setTimeout(() => say(['Connection closed by UNKNOWN port 65535'], hang), DELAY));
+} else if (mode === 'silent-hang') hang();
+else if (mode === 'deny-then-serve') say(LINES.deny(), () => setTimeout(serve, DELAY));
 else if (LINES[mode]) fail(LINES[mode]());
 else fail([`fake-ssh: unknown mode ${mode}`], 1);

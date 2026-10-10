@@ -6,15 +6,20 @@
 // A failed fetch or push is told apart as clone tells it (gitErrors.CONNECT_RULES: auth, host-key,
 // not-found, unreachable; docs/plans/ssh-remote-errors.md), carries the remote it failed on
 // (`remote`), and for an ssh remote's auth or host-key failure the ssh target the message names
-// (`ssh`, sshTarget).
-const { kindError, tagError, run, out, tryOut } = require('./exec');
+// (`ssh`, sshTarget). git's stderr goes to an ssh watch (src/ssh-stall.js): on Windows by default
+// it ends a git whose ssh printed its error and then hangs (Windows' OpenSSH on a pipe), and the
+// failure is reported as what ssh said (`stalled`); a user's cancel keeps ssh's line (`said`).
+const { GitError, kindError, tagError, run, out, tryOut } = require('./exec');
 const { headState } = require('./repo-dirs');
 const { verify, remotes, upstreamOf } = require('./git-reads');
 const { PREFIX, after, branchOf, fullBranch, isRefspecSafe } = require('./gitref');
 const gitErrors = require('./git-errors');
 const { sshFacts, splitRemote, asciiHost } = require('./ssh-text');
+const { createSshWatch, defaultStallMs, saidOf } = require('./ssh-stall');
 const { userOk } = require('./clone-url');
 const { logger } = require('./log');
+
+const log = logger.child('git');
 
 /** Default timeout for commands that talk to a remote (fetch / push). */
 const REMOTE_TIMEOUT_MS = 120000;
@@ -66,9 +71,6 @@ async function mirrorRemotes(cwd) {
   return [...found].map(([remote, why]) => ({ remote, why }));
 }
 
-/** git's stderr in `err` as lines (sshFacts reads them). */
-const stderrLines = (err) => String((err && err.stderr) || '').split(/\r\n|\n|\r/);
-
 // The host ssh names in its refusal (the resolved HostName): shown as text only, never in a command.
 const SHOWN_HOST = /^[A-Za-z0-9._:[\]-]{1,253}$/;
 const unbracketed = (host) => host.replace(/^\[(.*)\]$/, '$1').toLowerCase();
@@ -112,6 +114,54 @@ async function sshOf(cwd, remote, kind, facts, o) {
   return ssh ? { ssh } : {};
 }
 
+/**
+ * A remote command's run options under an ssh watch: {watch, opts, ms}. git's stderr goes to the
+ * watch; with a timer (`stallMs`, default defaultStallMs(): Windows only) git runs under the op's
+ * signal and the watch's own abort combined, so a stall ends git through the Cancel path
+ * (spawnGit's kill, signalGroup). Without a signal (a test) the stall alone can end it.
+ */
+function watched({ signal, timeout, stallMs }) {
+  const ms = stallMs === undefined ? defaultStallMs() : stallMs;
+  const stall = new AbortController();
+  const watch = createSshWatch({ stallMs: ms, onStall: () => stall.abort() });
+  const opts = { ...remoteOpts({ signal, timeout }), onStderr: (c) => watch.chunk(c) };
+  if (ms) opts.signal = AbortSignal.any([signal, stall.signal].filter(Boolean));
+  return { watch, opts, ms };
+}
+
+/** True for a user's cancel: kind 'aborted' with the op's own signal aborted (not a stall). */
+const userCancel = (err, signal) => !!err && err.kind === 'aborted' && !!signal && signal.aborted;
+
+/**
+ * A stall made into the failure it is: git was ended by the watch (`watch.fired`) and not by the
+ * user (a cancel at the same moment wins), so the error is git's text again (the watch's lines:
+ * spawnGit replaced it with "git was cancelled"), unclassified and `stalled`, for the caller's
+ * classification. Any other error is returned as it is.
+ */
+function unstall(err, watch, signal) {
+  if (!watch.fired || !(err instanceof GitError) || err.kind !== 'aborted' || (signal && signal.aborted)) return err;
+  const text = watch.text();
+  err.kind = undefined;
+  err.stderr = text;
+  err.message = text.trim() || err.message;
+  err.stalled = true;
+  return err;
+}
+
+/** The log record of a stall (no text: the kind and the timer only). */
+const logStall = (op, err, ms) => log.warn('ssh stalled after its error; git was ended', { op, kind: err.kind || null, ms });
+
+/**
+ * A user's cancel after ssh said why it failed: `said` {kind, line} (saidOf: redacted, at most 300
+ * characters) and, for auth / host-key, the ssh target the explanation names.
+ */
+async function withSaid(cwd, remote, err, facts, o) {
+  if (!facts) return err;
+  err.said = saidOf(facts);
+  Object.assign(err, await sshOf(cwd, remote, facts.kind, facts, o));
+  return err;
+}
+
 /** `err` with the remote it failed on (`remote`), unless it names one already. */
 function withRemote(err, remote) {
   if (err && typeof err === 'object' && err.remote === undefined) {
@@ -136,17 +186,24 @@ async function fetchRemote(cwd, remote, opts, skipTags = []) {
     const positive = configured.length ? configured : [`+refs/heads/*:refs/remotes/${remote}/*`];
     refspecs = [...positive, ...skipTags.map((t) => `^refs/tags/${t}`)];
   }
+  const { watch, opts: runOpts, ms } = watched(opts);
   try {
     // Never into submodules (their config and hooks are their own): on the command line, since
     // .gitmodules can turn fetch.recurseSubmodules back on per submodule.
-    await run(cwd, ['fetch', '--porcelain', '--prune', '--tags', '--no-recurse-submodules', remote, ...refspecs], remoteOpts(opts));
+    await run(cwd, ['fetch', '--porcelain', '--prune', '--tags', '--no-recurse-submodules', remote, ...refspecs], runOpts)
+      .finally(() => watch.stop());
     return skipTags;
-  } catch (err) {
+  } catch (e) {
+    const err = unstall(e, watch, opts.signal);
+    const facts = sshFacts(watch.lines());
     // A connection failure (the anchored patterns push and clone use), or "refusing to fetch into
     // branch 'refs/heads/x' checked out at '<path>'": the refspec writes local branches and a
     // worktree has that one checked out (git's message kept).
     const kind = gitErrors.kindFor(err, ...gitErrors.CONNECT_RULES, 'checkedOutElsewhere');
-    if (kind) throw tagError(err, kind, await sshOf(cwd, remote, kind, sshFacts(stderrLines(err))));
+    if (kind) tagError(err, kind, await sshOf(cwd, remote, kind, facts));
+    if (err.stalled) logStall('fetch', err, ms);
+    if (kind || err.stalled) throw err;
+    if (userCancel(err, opts.signal)) throw await withSaid(cwd, remote, err, facts);
     const rejected = gitErrors.unclassified(err) ? gitErrors.rejectedFetchRefs(err.stdout) : [];
     const tags = rejected.map((r) => after(r, PREFIX.TAGS)).filter((t) => t !== null);
     const next = [...new Set([...skipTags, ...tags])];
@@ -157,20 +214,22 @@ async function fetchRemote(cwd, remote, opts, skipTags = []) {
 
 /**
  * Fetch `remote` (default: every remote) with --prune --tags, never force-updating local tags.
- * @param {{remote?: string, signal?: AbortSignal, timeout?: number}} [opts] timeout per remote,
- *   default REMOTE_TIMEOUT_MS; a timeout/abort throws kind 'timeout'/'aborted'.
+ * @param {{remote?: string, signal?: AbortSignal, timeout?: number, stallMs?: number}} [opts]
+ *   timeout per remote, default REMOTE_TIMEOUT_MS; a timeout/abort throws kind 'timeout'/'aborted'
+ *   (a user's cancel with `said` when ssh had said why it failed). stallMs: the ssh watchdog's
+ *   silence after ssh's ending (default defaultStallMs(): 10 s on Windows, off elsewhere; 0: off).
  * @returns {Promise<{tagConflicts: string[]}>} local tags left alone because the remote's differ.
  * Connection failures throw kind 'auth', 'host-key', 'not-found' or 'unreachable' (as push and
  * clone do), so pull reports them the same way. Every error names the remote it failed on
  * (`remote`: Fetch All fetches one after another).
  */
-async function fetch(cwd, { remote, signal, timeout } = {}) {
+async function fetch(cwd, { remote, signal, timeout, stallMs } = {}) {
   if (remote !== undefined) checkRemoteName(remote);
   const names = remote !== undefined ? [remote] : await remotes(cwd);
   const tagConflicts = [];
   for (const name of names) {
     try {
-      tagConflicts.push(...(await fetchRemote(cwd, name, { signal, timeout })));
+      tagConflicts.push(...(await fetchRemote(cwd, name, { signal, timeout, stallMs })));
     } catch (err) {
       throw withRemote(err, name);
     }
@@ -184,8 +243,9 @@ async function fetch(cwd, { remote, signal, timeout } = {}) {
  * Rejections throw kind rejected-behind | rejected-stale | rejected-hook (with remoteMessage)
  * | rejected | auth | host-key | not-found | unreachable | mirror-repo | timeout | aborted; a
  * failure of git names the remote (`remote`), an ssh auth / host-key one its target (`ssh`).
+ * stallMs, `stalled` and `said`: as fetch.
  */
-async function push(cwd, { remote, branch, remoteBranch, force, signal, timeout } = {}) {
+async function push(cwd, { remote, branch, remoteBranch, force, signal, timeout, stallMs } = {}) {
   for (const [what, v] of [['branch', branch], ['remoteBranch', remoteBranch]]) {
     if (v !== undefined && v !== null && !isRefspecSafe(v)) {
       throw kindError('invalid-args', `Invalid ${what}: '${v}'`);
@@ -208,12 +268,18 @@ async function push(cwd, { remote, branch, remoteBranch, force, signal, timeout 
   } else if (force) {
     forceArgs = ['--force'];
   }
+  const { watch, opts, ms } = watched({ signal, timeout, stallMs });
   try {
     // --recurse-submodules=no: never checks or pushes submodules (fetch, above).
-    await run(cwd, ['push', '--porcelain', '--recurse-submodules=no', ...forceArgs, target, `refs/heads/${local}:refs/heads/${dst}`], remoteOpts({ signal, timeout }));
-  } catch (err) {
+    await run(cwd, ['push', '--porcelain', '--recurse-submodules=no', ...forceArgs, target, `refs/heads/${local}:refs/heads/${dst}`], opts)
+      .finally(() => watch.stop());
+  } catch (e) {
+    const err = unstall(e, watch, signal);
+    const facts = sshFacts(watch.lines());
     const c = gitErrors.unclassified(err) && gitErrors.classifyPush(err);
-    if (c) tagError(err, c.kind, { ...c.extra, ...(await sshOf(cwd, target, c.kind, sshFacts(stderrLines(err)), { push: true })) });
+    if (c) tagError(err, c.kind, { ...c.extra, ...(await sshOf(cwd, target, c.kind, facts, { push: true })) });
+    else if (userCancel(err, signal)) await withSaid(cwd, target, err, facts, { push: true });
+    if (err.stalled) logStall('push', err, ms);
     throw withRemote(err, target);
   }
   return { remote: target, branch: local, remoteBranch: dst, forced: force || false };
@@ -241,7 +307,7 @@ async function setUpstream(cwd, localBranch, remote, remoteBranch) {
     // Delete only if it still points where we put it.
     if (created) {
       await run(cwd, ['update-ref', '-d', tracking, created])
-        .catch((e) => logger.child('git').warn('could not remove tracking ref', { ref: tracking, err: e }));
+        .catch((e) => log.warn('could not remove tracking ref', { ref: tracking, err: e }));
     }
     // No fetch refspec of the remote maps a branch to refs/remotes/<remote>/ (`git clone --bare`
     // sets none), so git can't tell which remote branch that ref tracks.
@@ -254,5 +320,5 @@ async function setUpstream(cwd, localBranch, remote, remoteBranch) {
 
 module.exports = {
   REMOTE_TIMEOUT_MS, checkRemoteName, writesBranches, mirrorRemotes, fetch, push, setUpstream,
-  _internal: { sshTarget }, // exported for unit tests only
+  _internal: { sshTarget, unstall }, // exported for unit tests only
 };

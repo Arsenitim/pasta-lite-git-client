@@ -650,3 +650,29 @@ test('an error\'s text from git is shown as text: no element is made of it', asy
   t.btn('Close').click();
   await done;
 });
+
+test('a cancel after ssh said why it failed: the explanation (dialog, or a toast when forced shut); without said, the notice', async () => {
+  const said = { kind: 'host-key', line: 'Host key verification failed.' };
+  const t = setup();
+  const done = (await openForm(t)).done;
+  const s = await startWith(t, 'git@github.com:o/r.git');
+  t.btn('Cancel').click();
+  s.reject({ message: 'git was cancelled', kind: 'aborted', said });
+  await H.flush();
+  assert.equal(t.q('.dlg-title').textContent, 'Clone cancelled');
+  assert.match(t.q('.dlg-message').textContent, /ssh doesn't know github\.com yet .*\(ssh -T git@github\.com\)/);
+  assert.equal(t.q('.dlg-detail').textContent, 'ssh said: Host key verification failed.');
+  t.btn('OK').click();
+  await done;
+  assert.deepEqual(notices(t), []);
+  // Forced shut by another dialog: a notice with ssh's line.
+  const t2 = setup();
+  const d2 = (await openForm(t2)).done;
+  const s2 = await startWith(t2, 'git@github.com:o/r.git');
+  t2.D.confirm({ title: 'x' });
+  t2.D.close();
+  s2.reject({ message: 'git was cancelled', kind: 'aborted', said });
+  await d2;
+  assert.deepEqual(notices(t2), ['Clone cancelled. ssh said: Host key verification failed.']);
+  assert.equal(t2.C._internal.cancelView({ kind: 'aborted', message: 'x' }, { url: 'git@h.example:r.git' }), null, 'no said: the plain notice');
+});

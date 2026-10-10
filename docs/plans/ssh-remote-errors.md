@@ -888,3 +888,20 @@ Recorded while building S0–S3; none changes a decision of §1.2 or §10.
   `RECOMMEND_WINDOWS_OPENSSH` in `renderer/flows-kit.js` (false): set it to true when W6 passes,
   and turn the `doesNotMatch(windows, /core\.sshCommand/)` assertion in `test/flows.test.js`
   ("the ssh-agent hint per platform") into a `match`.
+
+**S2.**
+- `saidOf(facts)` (the redacted, bounded `said`) lives in `src/ssh-stall.js` next to the watch, so
+  remote.js and clone.js share it: that module also requires `src/redact.js` and
+  `src/display-text.js` (both pure, nothing of the git layer), not only `./ssh-text`.
+- "A cancel landing as the stall fires → the user's wins" is a unit test of the re-tag
+  (`remote._internal.unstall`): the race can't be timed from outside the process layer.
+- `proxyjump-hang` waits `FAKE_SSH_DELAY` (default 300 ms) between the jump host's refusal and the
+  outer `Connection closed by`, so the re-arm is observable (the stall comes 500 ms after the second
+  line). A hanging fake exits on its own after two minutes, so a failed test leaves nothing for long.
+- The Windows-only tree test uses `stallMs: 5000`, not 1000: the fake ssh is named by pid, image
+  and start time while it surely hangs, and PowerShell takes seconds to start on a CI runner.
+- `winProcesses`, `stillRunning` and `runningAfterKill` moved from `test/exec.test.js` to
+  `test/helpers.js` (with `fakeSsh`), so `test/remote-ssh.test.js` and `test/clone.test.js` share them.
+- A clone the watchdog ended never counts as a checkout failure (its text can't say so anyway).
+- `stalled` stays on the error in main (and in the log record's `kind`); it is not sent to the page,
+  which shows a stalled failure as its kind (or git's text) like any other.

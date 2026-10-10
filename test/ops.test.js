@@ -304,7 +304,7 @@ test('stash ops and checkout through the registry', async () => {
   assert.equal(h.read(dir, 'README.md'), 'wip\n');
 });
 
-test('serializeError carries a remote op\'s ssh target and remote as plain data (docs/plans/ssh-remote-errors.md §4.1)', () => {
+test('serializeError carries a remote op\'s ssh target, remote and said as plain data (docs/plans/ssh-remote-errors.md §4.1)', () => {
   const ge = Object.assign(new GitError(['fetch'], 128, 'git@h: Permission denied (publickey).\n', ''), {
     kind: 'auth', remote: 'origin', ssh: { host: 'h', port: 2222, user: 'git', shownAs: '192.0.2.7' },
   });
@@ -314,6 +314,10 @@ test('serializeError carries a remote op\'s ssh target and remote as plain data 
     ssh: { host: 'h', port: 2222, user: 'git', shownAs: '192.0.2.7' }, remote: 'origin',
   });
   assert.deepEqual(JSON.parse(JSON.stringify(s)), s);
+  const cancelled = Object.assign(new GitError(['fetch'], null, 'git was cancelled', ''), {
+    kind: 'aborted', remote: 'origin', said: { kind: 'auth', line: 'git@h: Permission denied (publickey).' },
+  });
+  assert.deepEqual(ops.serializeError(cancelled).said, { kind: 'auth', line: 'git@h: Permission denied (publickey).' });
 });
 
 test('serializeError keeps kind, exitCode, known extras, plain result, nested error messages; drops stack, args, stderr, env', () => {

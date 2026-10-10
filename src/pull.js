@@ -38,21 +38,21 @@ function pullMergeMessage(up, branch) {
 const PULL_MODES = Object.freeze(['fetch', ...Object.keys(PULL_ARGS), 'rebase']);
 
 /**
- * @param {{mode?: 'fetch'|'ff-if-possible'|'ff-only'|'rebase', signal?: AbortSignal}} [opts]
- *   `signal` cancels the fetch step.
+ * @param {{mode?: 'fetch'|'ff-if-possible'|'ff-only'|'rebase', signal?: AbortSignal, stallMs?: number}} [opts]
+ *   `signal` cancels the fetch step; `stallMs` is its ssh watchdog's (remote.fetch).
  * @returns {Promise<{mode, before, after, fastForward, tagConflicts: string[]}>}
  */
-async function pull(cwd, { mode = 'ff-if-possible', signal } = {}) {
+async function pull(cwd, { mode = 'ff-if-possible', signal, stallMs } = {}) {
   if (!PULL_MODES.includes(mode)) throw kindError('invalid-args', `Unknown pull mode: ${mode}`);
   const { sha: before, branch } = await headState(cwd);
   if (mode === 'fetch') {
-    const { tagConflicts } = await fetch(cwd, { signal });
+    const { tagConflicts } = await fetch(cwd, { signal, stallMs });
     return { mode, before, after: before, fastForward: false, tagConflicts };
   }
   if (!branch) throw kindError('detached', 'Cannot pull with a detached HEAD');
   const up = await upstreamOf(cwd, branch);
   if (!up) throw kindError('no-upstream', `Branch '${branch}' has no upstream`, { remotes: await remotes(cwd) });
-  const { tagConflicts } = up.remote && up.remote !== '.' ? await fetch(cwd, { remote: up.remote, signal }) : { tagConflicts: [] };
+  const { tagConflicts } = up.remote && up.remote !== '.' ? await fetch(cwd, { remote: up.remote, signal, stallMs }) : { tagConflicts: [] };
 
   if (mode === 'rebase') {
     // Our persistent autostash (src/autostash.js): a stop with conflicts stays a stopped rebase that
