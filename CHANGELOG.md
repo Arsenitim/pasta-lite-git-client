@@ -90,11 +90,11 @@ On Windows:
 - Windows' own OpenSSH no longer waits for a key passphrase or a host-key answer on a console
   nobody can see (an unknown host key left the app at "Working…" with no window to answer in):
   fetch, pull, push and clone give ssh Git for Windows' `false.exe` as its askpass, so ssh fails
-  with its error and the op ends with the explanation. An askpass you set yourself
-  (`SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`) is left alone; MinGit has no `false.exe`. Still to check
-  on a desktop with this build: the fast failure on an unknown host key and on a passphrase key,
-  no console window flashing when `false.exe` runs, and Git Credential Manager's sign-in
-  (docs/plans/ssh-remote-errors.md §13).
+  with its error and the op ends with the explanation: on a Windows desktop an unknown host key
+  now fails in about 0.7 s and a passphrase-protected key in about 1.1 s, and no console window
+  shows. An askpass you set yourself (`SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`) is left alone; MinGit
+  has no `false.exe`. Not yet checked by hand: Git Credential Manager's sign-in window over HTTPS
+  (docs/plans/ssh-remote-errors.md §13, W12).
 - Git for Windows is found in its usual install folders (machine-wide or per user) when it isn't on
   the PATH.
 - NTFS aliases of `.git` (its 8.3 short name, trailing dots or spaces, alternate data streams) are

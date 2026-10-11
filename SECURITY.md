@@ -75,10 +75,11 @@ and clone run ssh with `SSH_ASKPASS` pointing at Git for Windows' own `false.exe
 `SSH_ASKPASS_REQUIRE=force`, and ssh fails instead of prompting. They don't when you set
 `SSH_ASKPASS` or `SSH_ASKPASS_REQUIRE` yourself, or when git has no `false.exe` next to it
 (MinGit). The hooks git runs for those commands (such as `pre-push`) inherit the two variables;
-other operations and their hooks never get them. Its automated Windows checks pass; still to check
-on a desktop with this build: the fast failure on an unknown host key and on a passphrase key, no
-console window flashing when `false.exe` runs, and Git Credential Manager's sign-in
-([docs/plans/ssh-remote-errors.md](docs/plans/ssh-remote-errors.md) §13).
+other operations and their hooks never get them. On a Windows desktop an unknown host key and a
+passphrase-protected key through Windows' OpenSSH now fail within about a second, and `false.exe`
+opens no console window. Git Credential Manager's sign-in window over HTTPS (which can fall back
+to `SSH_ASKPASS` when it gets no answer) is still to be checked by hand
+([docs/plans/ssh-remote-errors.md](docs/plans/ssh-remote-errors.md) §13, W12).
 
 **Electron sandboxing.** Every page (the tab strip and each tab) runs with `contextIsolation`,
 `sandbox` and `webSecurity` on, with `nodeIntegration` off, and with a strict Content Security
