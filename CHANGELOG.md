@@ -80,13 +80,12 @@ On Windows:
   connecting over ssh may have started a background agent (gpg-agent, an ssh connection master):
   it is stopped with the command and starts again when next needed.
 - Git and its helpers no longer flash a console window.
-- An ssh that had already failed no longer keeps a fetch, pull, push or clone waiting. Windows' own
-  OpenSSH (run when `core.sshCommand` or `GIT_SSH_COMMAND` names it, or when Git for Windows was
-  installed with "Use external OpenSSH") passes git only the first line it writes and then never
-  exits, so fetch and push sat until their two-minute timeout and a clone until it was cancelled.
-  A changed host key reaches git only as the `@@@…` frame of ssh's warning, which is recognised
-  too. Windows' own OpenSSH also hangs after a successful connection, so it isn't supported for now:
-  use Git for Windows' own ssh (the default). Failed connections now end about 10
+- A safeguard for an ssh that prints its error and then never exits: when git's stderr ends with
+  one of ssh's error lines (or the `@@@…` frame of its security warnings) and nothing follows for
+  10 seconds, the fetch, pull, push or clone is ended and says what ssh reported, instead of
+  waiting for the two-minute timeout (a clone, until cancelled). In testing, Windows' own OpenSSH
+  behaved like that only when git ran inside an sshd session; on a desktop it exits after its
+  error, and the safeguard has nothing to do. When it acts, the op ends about 10
   seconds after ssh's error, with its explanation.
 - Windows' own OpenSSH no longer waits for a key passphrase or a host-key answer on a console
   nobody can see: fetch, pull, push and clone give ssh Git for Windows' `false.exe` as its askpass,
