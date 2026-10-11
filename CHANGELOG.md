@@ -88,11 +88,12 @@ On Windows:
   too. Windows' own OpenSSH also hangs after a successful connection, so it isn't supported for now:
   use Git for Windows' own ssh (the default). Failed connections now end about 10
   seconds after ssh's error, with its explanation.
-- **Pending Windows QA** (not yet verified on Windows, see docs/plans/ssh-remote-errors.md §13):
-  Windows' own OpenSSH should no longer wait for a key passphrase or a host-key answer on a console
+- Windows' own OpenSSH no longer waits for a key passphrase or a host-key answer on a console
   nobody can see: fetch, pull, push and clone give ssh Git for Windows' `false.exe` as its askpass,
   so ssh fails with its error (and the op ends with the explanation) instead of hanging. An askpass
   you set yourself (`SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`) is left alone; MinGit has no `false.exe`.
+  Still to check by hand on a desktop: that no console window flashes when `false.exe` runs, and
+  Git Credential Manager's sign-in window (docs/plans/ssh-remote-errors.md §13).
 - Git for Windows is found in its usual install folders (machine-wide or per user) when it isn't on
   the PATH.
 - NTFS aliases of `.git` (its 8.3 short name, trailing dots or spaces, alternate data streams) are

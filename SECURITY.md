@@ -69,13 +69,14 @@ Examples of vulnerabilities in this area:
 - a way to get past the prompt, or to reuse a trust decision for a different repository or
   different settings
 
-**ssh on Windows** (pending Windows QA: [docs/plans/ssh-remote-errors.md](docs/plans/ssh-remote-errors.md)
-§13). Fetch, pull, push and clone are set to run ssh with `SSH_ASKPASS` pointing at Git for
+**ssh on Windows.** Fetch, pull, push and clone run ssh with `SSH_ASKPASS` pointing at Git for
 Windows' own `false.exe` and `SSH_ASKPASS_REQUIRE=force`, so that ssh fails instead of prompting
 on a console nobody can see. They don't when you set `SSH_ASKPASS` or `SSH_ASKPASS_REQUIRE`
 yourself, or when git has no `false.exe` next to it (MinGit). The hooks git runs for those
 commands (such as `pre-push`) inherit the two variables; other operations and their hooks never
-get them.
+get them. Verified on Windows 11, except two checks still to make by hand on a desktop: that no
+console window flashes when `false.exe` runs, and Git Credential Manager's sign-in window
+([docs/plans/ssh-remote-errors.md](docs/plans/ssh-remote-errors.md) §13).
 
 **Electron sandboxing.** Every page (the tab strip and each tab) runs with `contextIsolation`,
 `sandbox` and `webSecurity` on, with `nodeIntegration` off, and with a strict Content Security

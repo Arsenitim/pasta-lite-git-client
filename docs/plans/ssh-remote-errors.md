@@ -984,6 +984,9 @@ Recorded while building S0–S3; none changes a decision of §1.2 or §10.
   its own and says the behaviour is pending Windows QA, as does the changelog's entry; and
   `askpassEnv`'s production path (no injection: `gitExecutable()`, the cache) has a test that runs
   where Git for Windows is installed (Windows CI).
+- After the Windows QA (§13): S3's automated rows passed (W3, W4, W10, W11, W15, W12's automated
+  part), so S3 is kept; the changelog's entry and SECURITY.md state it as fact and name the two
+  desktop checks left (a console window flashing when `false.exe` runs; GCM's sign-in window).
 
 ---
 
