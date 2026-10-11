@@ -999,8 +999,10 @@ Recorded while building S0–S3; none changes a decision of §1.2 or §10.
   `askpassEnv`'s production path (no injection: `gitExecutable()`, the cache) has a test that runs
   where Git for Windows is installed (Windows CI).
 - After the Windows QA (§13): S3's automated rows passed (W3, W4, W10, W11, W15, W12's automated
-  part), so S3 is kept; the changelog's entry and SECURITY.md state it as fact and name the two
-  desktop checks left (a console window flashing when `false.exe` runs; GCM's sign-in window).
+  part), and on a desktop the hidden-prompt hang it fixes is real (an unknown host key with
+  Windows' OpenSSH: stuck at "Working…", 0.2.1 without S3). S3 is kept; the changelog's entry and
+  SECURITY.md say so and name the desktop check of this build left (the fast failure on an unknown
+  host key and on a passphrase key, no console window flashing, GCM's sign-in).
 
 ---
 
