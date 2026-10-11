@@ -1104,7 +1104,10 @@ clone isn't. Until we know, the safeguards are the "Waiting…" notice with the 
 - **Windows' own OpenSSH** (System32, 9.5p2; used only when the user sets `core.sshCommand` or
   `GIT_SSH_COMMAND` to it) **hangs** in both cases, with or without BatchMode: it prints its
   error, then never exits while its stderr is a pipe (reproduced outside the app too). Cancel
-  always worked: the op settled about 120 ms after the abort, with no git or ssh left.
+  always worked: the op settled about 120 ms after the abort, with no git or ssh left. The
+  follow-up's Windows QA ([ssh-remote-errors.md](ssh-remote-errors.md) §13) found more: with its
+  stdin a pipe it passes git only its first stderr write and no stdout, and it never exits after
+  a **successful** connection either, so that setup isn't supported for now.
 
 So BatchMode is not applied: it would only apply when no ssh command is set, where the default ssh
 already fails fast, and it doesn't help Windows' OpenSSH. The safeguards for that setup stay the
@@ -1528,7 +1531,8 @@ fails fast on a passphrase-protected key (`auth`, about 0.9 s) and on an unknown
 about 0.6 s), with or without BatchMode. Windows' own OpenSSH, which runs only when the user sets
 it as `core.sshCommand` / `GIT_SSH_COMMAND`, prints its error and then never exits while its
 stderr is a pipe, BatchMode or not; Cancel ends it (settled about 120 ms after the abort, nothing
-left running). BatchMode would help neither, so it is not applied.
+left running). BatchMode would help neither, so it is not applied. (Later QA, ssh-remote-errors.md
+§13: it passes git only its first stderr write, and it hangs after a successful connection too.)
 
 **Follow-up (a separate PR after #9).** Planned and built in [ssh-remote-errors.md](ssh-remote-errors.md)
 (the same connection rules on fetch, pull and push, a changed host key told apart, the stall

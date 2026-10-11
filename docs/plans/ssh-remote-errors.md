@@ -179,6 +179,12 @@ signal (`src/runner.js:52`), and the ops also pass it explicitly (`src/ops.js:54
      while its stderr is a pipe. Reproduced outside the app (`git ls-remote … 2>&1 | findstr`).
      With stderr to a file it exits in about 0.5 s with 255. **Unknown:** whether a successful
      connection hangs the same way (QA row W6, run first: S0).
+     **Answered by the Windows QA of this branch (§13):** with its stdin a pipe (git always gives
+     it one), Windows' OpenSSH 9.5p2 relays no stdout and only its *first* stderr write, and never
+     exits, also after a **successful** connection and also with stderr to a file (W6 fails). A
+     failure whose message is one line (auth, an unknown host key, unreachable) still reaches git
+     whole; a changed host key's warning reaches it only as its first line, the `@@@…` frame (W8,
+     §12).
 - **Cancel always worked**: the op settled about 120 ms after the abort, the whole tree (git shim,
   git, sh, ssh) gone. Since `signalGroup` skips `taskkill` once git has exited
   (`src/git-process.js:303-306`), that ssh died in the `taskkill /T` tree **implies git was still
@@ -789,8 +795,8 @@ passes, and W16 shows `git.exe` alive during the hang.
 | Risk | Impact | Mitigation |
 |---|---|---|
 | The watchdog ends a working setup: a wrapper that retries and then transfers silently on stderr for more than 10 s (stdout isn't watched, `spawnGit` being unchanged); a hook that prints one of ssh's endings and then stays silent | a failed op where the terminal works (Windows only) | anchored endings, the silence rule, 10 s, Windows only; the message is ssh's own line, so the cause is visible. No escape hatch (decided); Q10 records the stdout tap as the follow-up if it happens |
-| Windows' OpenSSH also hangs after a **successful** connection (§3.2, unknown) | every fetch / push with that setup ends at the 120 s timeout, clone never | W6 runs first (S0). If it hangs, that is a separate fix, not this PR, and the Windows hint never recommends `core.sshCommand` (Q9) |
-| During the exit hang **only ssh** holds git's stderr and git has exited (contrary to the inference in §3.2) | git's own `fatal: Could not read from remote repository.` (not an ending) disarms the watchdog, and an abort would skip `taskkill` (`src/git-process.js:303-306`) and run only the MSYS kill, which doesn't reach a native `ssh.exe`: the op still hangs until the user cancels, and even that may not end it | W16 checks by name that `git.exe` is alive during the hang. If it isn't, S2's watchdog is held back and the kill of an orphaned native ssh becomes its own change to `signalGroup` |
+| Windows' OpenSSH also hangs after a **successful** connection (§3.2) | every fetch / push with that setup ends at the 120 s timeout, clone never (Cancel ends both in about 120 ms) | **Happens: W6 failed** (§13). Windows' own OpenSSH is not supported for now: the Windows hint never recommends `core.sshCommand` (Q9, `RECOMMEND_WINDOWS_OPENSSH` stays false), the changelog says to use Git for Windows' own ssh, and making it work is a separate fix later (its stdin pipe and first-write-only relay, §3.2) |
+| During the exit hang **only ssh** holds git's stderr and git has exited (contrary to the inference in §3.2) | git's own `fatal: Could not read from remote repository.` (not an ending) disarms the watchdog, and an abort would skip `taskkill` (`src/git-process.js:303-306`) and run only the MSYS kill, which doesn't reach a native `ssh.exe`: the op still hangs until the user cancels, and even that may not end it | **Doesn't happen:** W16 saw `git.exe` (and `sh.exe`, `ssh.exe`) alive during every hang, and nothing left after the stall |
 | `false.exe` can't be started by one ssh flavour (path with spaces, forward slashes) | S3 does nothing for that flavour, and the error detail gains ssh's "cannot execute" line | W11; fallback forms (backslashes, the 8.3 short path) tried in that order in QA before S3 merges; else S3 is dropped |
 | `false.exe` (an MSYS console program) flashes a console window when Windows' OpenSSH starts it | a visible flicker on each failure | W3 / W4 check it; if it flashes, S3 is dropped (no window-hiding wrapper is worth its complexity before P3a) |
 | `SSH_ASKPASS` reaching git's own https prompt (V12) | one extra line in the https auth detail on Windows | filtered when displayed (§4.5); the kind is unchanged |
@@ -896,6 +902,24 @@ Recorded while building S0–S3; none changes a decision of §1.2 or §10.
 - `remote._internal` is gone (the race test moved to `test/ssh-stall.test.js`), and so are
   `authAlert` and the frozen-error guard in `withRemote`.
 
+**Windows QA follow-up: W8 (a changed host key through Windows' OpenSSH).**
+- Windows' OpenSSH passes git only its first stderr write (§3.2), so of a changed key's warning
+  git sees one line, the `@@@…` frame, and no ending ever came: fetch ran into its 120 s timeout
+  and clone hung until cancelled (W8). A bare frame (`^@{20,}\r?$`, `BANNER` in
+  `src/ssh-text.js`) is now an ending, so the watchdog arms on it.
+- A stall whose ssh lines are only that frame, with no other warning named in it (an unprotected
+  key file, possible DNS spoofing), reads as `host-key` with `ssh.changed` and `ssh.bannerOnly`
+  (`sshFacts`, `watch.stallKind`). It is a stall-only reading: a git that exits by itself is
+  classified by its lines as before. A changed key's warning that lacks its last line reads as
+  `host-key` too, with what it said.
+- The page says "ssh stopped at a security warning": most often a changed host key, read the whole
+  warning with `ssh -T` from a terminal, check the key before removing the saved one; never
+  "accept". With no fingerprint or key name, `ssh-keygen -R` falls back to the URL's host.
+- The bundled ssh's full block reads as before (its last line decides; the first fingerprint and
+  key name win); after its frame come lines that are no endings, so an unprotected key's warning
+  followed by a successful connection never stalls. Fake mode `banner-hang`; tests for fetch,
+  pull, push and clone.
+
 **S0, the fake ssh.**
 - The tests set `FAKE_SSH_REPO` on Windows from the start (the fake prefers it to the path in git's
   command), instead of only after Windows CI showed MSYS mangling the path: CI had not run when the
@@ -965,48 +989,54 @@ Recorded while building S0–S3; none changes a decision of §1.2 or §10.
 
 ## 13. QA log
 
-The rows of §7.5, as a flow: steps and expected result there, observed and result here. Nothing
-below has run yet: the Windows box was off when S0–S3 were built, and no row is marked passed
-without being run.
+The rows of §7.5, as a flow: steps and expected result there, observed and result here. Run on
+the Windows 11 box at `195bea0` (Git for Windows 2.52 in `C:\Program Files\Git`, Windows'
+OpenSSH 9.5p2, a local sshd and throwaway keys and known_hosts files; times from ssh's line,
+"fire" when the watchdog fired). The rows' scripts and JSON results are kept outside the repository.
+W6 ran inside an sshd session; a re-check from a desktop session is pending (the user).
 
-**The merge gate.** The branch merges only when all of these pass:
-1. **Windows CI** green, with the Windows-only tests run, not skipped: the stall tree test, the
-   `false.exe` test and the askpass `env` test's Windows branch (S0's `serve` / `deny` among them).
-2. **W6** (first): Windows' OpenSSH doesn't hang after a successful connection.
-3. **S2's rows**: W16 (`git.exe` alive during the hang), W17, W7. If W16 shows git gone, S2's
-   watchdog is held back (§9).
-4. **S3's rows**: W3, W4, W10, W11, W12, W15. If one fails, revert S3's commits (they are listed in
-   the PR description) and note it in clone-repository.md §15 and roadmap.md §3.5.
+**The merge gate.**
+1. **Windows CI / the box's suite**: 1876 tests, 1847 pass, 0 fail, 29 skipped; every fake-ssh and
+   Windows-only test ran and passed (the stall tree kill, `false.exe`, `askpassEnv`'s production
+   path, the askpass integration). **Pass.**
+2. **W6: fails.** Windows' own OpenSSH hangs after a successful connection too (§3.2, §9). It is
+   not supported for now; `RECOMMEND_WINDOWS_OPENSSH` stays false. Not a merge blocker: the
+   default (Git for Windows' own ssh) is unaffected, and §9 records the follow-up.
+3. **S2's rows** (W16, W17, W7): **pass**, `git.exe` alive during every hang. W8 failed at
+   `195bea0` and is fixed since (§12); its re-run is pending.
+4. **S3's rows**: W3, W4, W10, W11, W15 and W12's automated part **pass**; S3 is kept. Still
+   manual, on a desktop: whether `false.exe` flashes a console window (W3, W4), and GCM's sign-in
+   window (W12).
 
-**The edits once it passes:**
-- W6 passed: `RECOMMEND_WINDOWS_OPENSSH = true` in `renderer/flows-kit.js`, and in the "ssh-agent
-  hint per platform" test of `test/flows.test.js` the `doesNotMatch(windows, /git config --global
-  core\.sshCommand/)` becomes a `match` (and the `openSsh` paragraph's expected text the gated one).
-- S2's rows passed: in CHANGELOG.md drop the "**Pending Windows QA** (…)" lead of the stall bullet
-  and say "no longer keeps … They now end", as a fact.
-- S3's rows passed: the same for the askpass bullet, and in SECURITY.md the "ssh on Windows"
-  paragraph drops "pending Windows QA" and says what the app does, as a fact.
-- Then mark the rows below passed, with what was observed.
+**The edits once the rest passes:**
+- W6 passes on a desktop and a later fix makes Windows' OpenSSH work: `RECOMMEND_WINDOWS_OPENSSH =
+  true` in `renderer/flows-kit.js`, and in the "ssh-agent hint per platform" test of
+  `test/flows.test.js` the `doesNotMatch(windows, /git config --global core\.sshCommand/)` becomes
+  a `match` (and the `openSsh` paragraph's expected text the gated one); the changelog drops "isn't
+  supported for now".
+- The console-flash and GCM checks pass: the changelog's askpass bullet and SECURITY.md's "ssh on
+  Windows" paragraph drop their "pending" note and state it as fact.
+- Then mark those rows passed below, with what was observed.
 
 | # | Steps (§7.5) | Expected | Observed | Result |
 |---|---|---|---|---|
-| CI | macOS, Ubuntu and Windows CI on the branch | green; on Windows the fake ssh's `serve` and `deny` (S0), every fake-ssh case, the tree test and the two askpass tests run, not skip | built and green on macOS only (git 2.51.2, Node 22) | pending |
-| W6 | Windows' OpenSSH as `core.sshCommand`, key in its agent, known host; Fetch, Pull, Push, Clone | all succeed in normal time | not run | pending |
-| W1 | bundled ssh, passphrase key not in an agent | ssh auth dialog within ~1 s, Windows hint, nothing left | not run | pending |
-| W2 | bundled ssh, unknown host | "Unknown host key" within ~1 s | not run | pending |
-| W16 | Windows' OpenSSH, S3 off, a refused key without passphrase | auth dialog ~10 s after ssh's line, `git.exe` alive during the wait, nothing left after | not run | pending |
-| W17 | Windows' OpenSSH, unreachable host | toast (Fetch) / dialog (Push) within ~10 s | not run | pending |
-| W3 | Windows' OpenSSH, S3 on, passphrase key not in its agent | auth dialog after ~10 s, no console window | not run | pending |
-| W4 | Windows' OpenSSH, S3 on, unknown host | "Unknown host key" after ~10 s, no console window | not run | pending |
-| W5 | S3 standing down (`SSH_ASKPASS_REQUIRE=never`) | the prompt hang as today; Cancel → "Fetch cancelled" | not run | pending |
-| W7 | as W16, Cancel within 10 s | "Fetch cancelled" with "ssh said: …" | not run | pending |
-| W8 | Windows' OpenSSH, changed host key | "The server's host key changed", fingerprint, no "accept" | not run | pending |
-| W9 | bundled ssh, network off | toast / dialog / "Can't reach the server" | not run | pending |
-| W10 | user's own `SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE` | the user's helper is called | not run | pending |
-| W11 | default install path (with a space), W3 and W1 | `false.exe` runs for both ssh flavours | not run | pending |
-| W12 | HTTPS with GCM; then close GCM's window | sign-in works; "Authentication failed" without the askpass line | not run | pending |
-| W15 | Git for Windows with "Use external OpenSSH": W6, W16, W3 | as with `core.sshCommand` | not run | pending |
-| W13 | PuTTY / TortoisePlink as `GIT_SSH` | works; TortoisePlink's own dialog | not run | pending |
-| W14 | Windows 10, OpenSSH 8.1, W3 | the prompt hang (recorded, expected) | not run | pending |
-| W18 | Copy Diagnostics after W1–W17 | no key path, URL credentials, home path or ssh lines | not run | pending |
-| M1–M8 | macOS rows of §7.5 | as listed there | not run | pending |
+| CI | the suite on Windows (the box) | green; every fake-ssh and Windows-only test runs | 1876 tests, 1847 pass, 0 fail, 29 skipped; all of those ran | pass |
+| W6 | Windows' OpenSSH as `core.sshCommand`, good key, known host; Fetch, Pull, Push, Clone | all succeed in normal time | every op hung: ls-remote and clone with stderr to a file ended only at the 60 s deadline, the app's ops only by Cancel (40 s, settled ~120 ms after it). The bundled ssh succeeded in 0.34–0.49 s per op | **fail** (§9) |
+| W1 | bundled ssh, passphrase key not in an agent | auth within ~1 s, nothing left | `auth` 115–189 ms after the start (Fetch, Pull, Push, Clone) | pass |
+| W2 | bundled ssh, unknown host | `host-key` within ~1 s | `host-key`, 114 ms (Clone), 139 ms (Fetch) | pass |
+| W16 | Windows' OpenSSH, S3 off, refused key | `auth` ~10 s after ssh's line, `git.exe` alive, nothing left | `auth`, stalled; fire 10.015–10.016 s, settled 10.13–10.17 s after the line; git, sh, ssh alive during the hang; nothing left | pass |
+| W17 | Windows' OpenSSH, unreachable | `unreachable` within ~10 s | `unreachable`, stalled; settled 10.13–10.14 s after the line (Fetch, Push, Clone) | pass |
+| W3 | Windows' OpenSSH, S3 on, passphrase key | auth after ~10 s, no console window | `auth`, stalled, 10.12–10.15 s after the line; `false.exe` reached ssh. Console window: manual | pass (automated) / manual |
+| W4 | Windows' OpenSSH, S3 on, unknown host | `host-key` after ~10 s, no console window | `host-key`, stalled, 10.13–10.14 s. Console window: manual | pass (automated) / manual |
+| W5 | S3 standing down (`SSH_ASKPASS_REQUIRE=never`) | the prompt hang; Cancel → aborted; Fetch ends at 120 s | Cancel settled 116–118 ms after it; Fetch's timeout at 120.15 s | pass |
+| W7 | as W16, Cancel within 10 s | aborted with `said` | aborted, `said` `auth` with ssh's line; settled 120–141 ms after the Cancel | pass |
+| W8 | Windows' OpenSSH, changed host key | the changed-key dialog, no "accept" | at `195bea0`: only the `@@@…` frame reached git; Fetch timed out at 120 s, Clone hung until cancelled. The bundled ssh: `host-key` with `changed`, the fingerprint and `keyName` in 0.12 s | **fail, fixed since** (§12); re-run pending |
+| W9 | bundled ssh, unreachable | toast / dialog | `unreachable` 4 ms after the line (Fetch, Push) | pass |
+| W10 | user's own `SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE` | the user's helper is called | the user's `.cmd` helper was called (by both ssh flavours); the app set nothing | pass |
+| W11 | default install path (with a space), W3 and W1 | `false.exe` runs for both ssh flavours | `C:/Program Files/Git/usr/bin/false.exe` ran for both; control with a missing askpass: Windows' OpenSSH hung to the timeout | pass |
+| W12 | HTTPS: no helper, and GCM; then close GCM's window | `auth`, without the askpass line shown | `auth`; the error keeps git's "unable to read askpass response" line, which the page drops (§4.5). GCM's sign-in window: manual | pass (automated) / manual |
+| W15 | git running Windows' OpenSSH from `PATH` | as with `core.sshCommand` | a private Git copy without `usr\bin\ssh*.exe`, so git ran System32's ssh from `PATH`: W16's case (S3 off) and W3's (with that copy's `false.exe`) stalled as `auth`, settled 10.13–10.16 s after the line; W6's case hung as above | pass |
+| W13 | PuTTY / TortoisePlink as `GIT_SSH` | works; TortoisePlink's own dialog | not run | manual |
+| W14 | Windows 10, OpenSSH 8.1, W3 | the prompt hang (recorded, expected) | not run | manual |
+| W18 | Copy Diagnostics after W1–W17 | no key path, URL credentials, home path or ssh lines | not run | manual |
+| M1–M8 | macOS rows of §7.5 | as listed there | not run | manual |
