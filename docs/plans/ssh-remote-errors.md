@@ -1008,7 +1008,7 @@ Recorded while building S0–S3; none changes a decision of §1.2 or §10.
 
 ## 13. QA log
 
-The rows of §7.5, as a flow: steps and expected result there, observed and result here. Two runs:
+The rows of §7.5, as a flow: steps and expected result there, observed and result here. Three runs:
 1. **The box, over ssh** (Windows 11, `195bea0`, Git for Windows 2.52 in `C:\Program Files\Git`,
    Windows' OpenSSH 9.5p2, a local sshd and throwaway keys and known_hosts files): every automated
    row. git ran inside an **sshd session** there, where Windows' OpenSSH relays only its first
@@ -1016,6 +1016,15 @@ The rows of §7.5, as a flow: steps and expected result there, observed and resu
    W15 (about 10.1 s) are the watchdog ending that session artifact, not desktop behaviour.
 2. **The user's interactive desktop** (the packaged 0.2.1 build, which starts git as this branch
    does): W6 and the failure and prompt cases with Windows' OpenSSH, against github.com.
+3. **This branch on the desktop** (`415ccec`; rows D-A to D-flash below): in alex's interactive
+   session (session 2, over RDP), the branch's real `src/remote.js` fetch as `ops.fetch` runs it
+   (the default 120 s timeout, the 10 s stall), started by electron.exe (Electron 44.4.5) with
+   `ELECTRON_RUN_AS_NODE=1` after `FreeConsole` (no console, as the app has none), Git 2.52.0, and
+   S3's env from the real `askpassEnv()` (`SSH_ASKPASS=C:/Program Files/Git/usr/bin/false.exe`,
+   `SSH_ASKPASS_REQUIRE=force`). Cases without S3 set `SSH_ASKPASS_REQUIRE=never` (S3 stands down)
+   and were cancelled at 40 s. A window watcher (an event hook plus a 30 ms poll) looked for any
+   window shown or created by ssh.exe, conhost.exe, false.exe, git.exe, sh.exe, taskkill.exe or
+   electron.exe.
 
 **Where it stands.**
 1. The suite on Windows: 1876 tests, 1847 pass, 0 fail, 29 skipped; every fake-ssh and
@@ -1026,15 +1035,15 @@ The rows of §7.5, as a flow: steps and expected result there, observed and resu
 3. **S2's rows** (W16, W17, W7): pass inside the sshd session, `git.exe` alive during every hang.
    On the desktop there is no exit hang to end: a refused key fails within seconds by itself. S2
    is kept as insurance (§12).
-4. **S3's rows**: W3, W4, W10, W11, W15 and W12's automated part pass. The prompt hang S3 fixes is
-   real on the desktop (0.2.1, no S3: stuck at "Working…").
-5. **Still to do on a desktop with this branch's build**: an unknown host key and a passphrase key
-   through Windows' OpenSSH fail fast (S3) instead of hanging; no console window flashes when
-   `false.exe` runs (W3, W4); Git Credential Manager's sign-in window (W12). Then W13, W14, W18 and
-   the macOS rows.
+4. **S3's rows**: W3, W4, W10, W11, W15 and W12's automated part pass, and **pass on the desktop
+   with this branch** (run 3): an unknown host key and a passphrase key through Windows' OpenSSH
+   fail in 0.7–1.1 s instead of hanging, and no console window flashes. The prompt hang S3 fixes is
+   real there (0.2.1, and this branch with S3 standing down: hung until cancelled).
+5. **Still manual**: Git Credential Manager's sign-in window (W12); W8 and a W6 success on this
+   build on the desktop; W13, W14, W18; the macOS rows.
 
-**The edits once the desktop check passes:** the changelog's askpass bullet and SECURITY.md's "ssh
-on Windows" paragraph drop "still to check" and state it as fact; mark the rows below.
+The changelog's askpass bullet and SECURITY.md's "ssh on Windows" paragraph state the desktop
+results as fact and name W12's GCM check as the one left.
 
 | # | Steps (§7.5) | Expected | Observed | Result |
 |---|---|---|---|---|
@@ -1042,19 +1051,25 @@ on Windows" paragraph drop "still to check" and state it as fact; mark the rows 
 | W6 | Windows' OpenSSH as `core.sshCommand`, key in its agent service, known host | all succeed in normal time | **desktop**: from the console ls-remote 2.0 s, clone 15.1 s (6.6 MiB), fetch 2.4 s; in the app three Pulls in 2.1–2.6 s. Inside the sshd session every op hung (ls-remote and clone to the 60 s deadline; the app's ops until Cancel), while the bundled ssh succeeded in 0.34–0.49 s | **pass** (desktop); session artifact |
 | W6b | desktop, Windows' OpenSSH, a refused key, in the app (0.2.1) | auth, fast | "Authentication failed" within a few seconds, with git's whole stderr (ssh's line, "fatal: Could not read from remote repository.", the access-rights lines) | pass: no exit hang on the desktop |
 | W6c | desktop, Windows' OpenSSH, an unknown host key (`ssh://git@ssh.github.com:443/…`), in the app (0.2.1, no S3) | — (the prompt hang, §3.2) | stuck at "Working…", no console window to answer in | reproduced: S3's case |
+| D-A | run 3: Windows' OpenSSH, unknown host (`ssh.github.com:443`), S3 on | `host-key`, fast | `host-key` in 703 ms; ssh exited by itself (no stall); `false.exe` seen as a child of System32's ssh.exe | pass |
+| D-A0 | as D-A, S3 standing down (`SSH_ASKPASS_REQUIRE=never`) | the prompt hang | hung; aborted by the 40 s cancel, settled 142 ms after it | reproduced (S3's case) |
+| D-B | run 3: Windows' OpenSSH, a passphrase-protected PEM key with no `.pub`, S3 on | `auth`, fast | `auth` in 1108 ms | pass |
+| D-B0 | as D-B, S3 off | the prompt hang | hung until the 40 s cancel, settled 122 ms after it | reproduced (S3's case) |
+| D-C | run 3: bundled ssh, unknown host, S3 on | `host-key`, fast | `host-key` in 722 ms; `false.exe` seen as a child of the MSYS ssh.exe | pass |
+| D-flash | run 3, every case above | no console window | none: no window shown or created by ssh.exe, conhost.exe, false.exe, git.exe, sh.exe, taskkill.exe or electron.exe; each git's conhost never created one. No process left; `~/.ssh/known_hosts` byte-identical | pass |
 | W1 | bundled ssh, passphrase key not in an agent | auth within ~1 s, nothing left | `auth` 115–189 ms after the start (Fetch, Pull, Push, Clone) | pass |
 | W2 | bundled ssh, unknown host | `host-key` within ~1 s | `host-key`, 114 ms (Clone), 139 ms (Fetch) | pass |
 | W16 | Windows' OpenSSH, S3 off, refused key (sshd session) | `auth` ~10 s after ssh's line, `git.exe` alive, nothing left | `auth`, stalled; fire 10.015–10.016 s, settled 10.13–10.17 s after the line; git, sh, ssh alive during the hang; nothing left | pass (the session artifact, ended) |
 | W17 | Windows' OpenSSH, unreachable (sshd session) | `unreachable` within ~10 s | `unreachable`, stalled; settled 10.13–10.14 s after the line (Fetch, Push, Clone) | pass (as W16) |
-| W3 | Windows' OpenSSH, S3 on, passphrase key (sshd session) | auth, no console window | `auth`, stalled, 10.12–10.15 s after the line; `false.exe` reached ssh. Desktop (fast failure, no console window): to do | pass (automated) / desktop to do |
-| W4 | Windows' OpenSSH, S3 on, unknown host (sshd session) | `host-key`, no console window | `host-key`, stalled, 10.13–10.14 s. Desktop: to do | pass (automated) / desktop to do |
+| W3 | Windows' OpenSSH, S3 on, passphrase key (sshd session) | auth, no console window | `auth`, stalled, 10.12–10.15 s after the line; `false.exe` reached ssh. Desktop: D-B, D-flash | pass |
+| W4 | Windows' OpenSSH, S3 on, unknown host (sshd session) | `host-key`, no console window | `host-key`, stalled, 10.13–10.14 s. Desktop: D-A, D-C, D-flash | pass |
 | W5 | S3 standing down (`SSH_ASKPASS_REQUIRE=never`) | the prompt hang; Cancel → aborted; Fetch ends at 120 s | Cancel settled 116–118 ms after it; Fetch's timeout at 120.15 s | pass |
 | W7 | as W16, Cancel within 10 s | aborted with `said` | aborted, `said` `auth` with ssh's line; settled 120–141 ms after the Cancel | pass |
 | W8 | Windows' OpenSSH, changed host key (sshd session) | the changed-key dialog, no "accept" | at `195bea0` only the `@@@…` frame reached git: Fetch timed out at 120 s, Clone hung until cancelled; most likely the session artifact. The bundled ssh: `host-key` with `changed`, the fingerprint and `keyName` in 0.12 s | fixed since as insurance (§12); desktop re-run to do |
 | W9 | bundled ssh, unreachable | toast / dialog | `unreachable` 4 ms after the line (Fetch, Push) | pass |
 | W10 | user's own `SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE` | the user's helper is called | the user's `.cmd` helper was called (by both ssh flavours); the app set nothing | pass |
 | W11 | default install path (with a space), W3 and W1 | `false.exe` runs for both ssh flavours | `C:/Program Files/Git/usr/bin/false.exe` ran for both; control with a missing askpass: Windows' OpenSSH hung to the timeout | pass |
-| W12 | HTTPS: no helper, and GCM; then close GCM's window | `auth`, without the askpass line shown | `auth`; the error keeps git's "unable to read askpass response" line, which the page drops (§4.5). GCM's sign-in window: desktop to do | pass (automated) / desktop to do |
+| W12 | HTTPS: no helper, and GCM; then close GCM's window | `auth`, without the askpass line shown | `auth`; the error keeps git's "unable to read askpass response" line, which the page drops (§4.5). GCM's sign-in window: manual, not run | pass (automated) / manual |
 | W15 | git running Windows' OpenSSH from `PATH` | as with `core.sshCommand` | a private Git copy without `usr\bin\ssh*.exe`, so git ran System32's ssh from `PATH`: W16's case (S3 off) and W3's (with that copy's `false.exe`) stalled as `auth`, settled 10.13–10.16 s after the line (sshd session) | pass |
 | W13 | PuTTY / TortoisePlink as `GIT_SSH` | works; TortoisePlink's own dialog | not run | manual |
 | W14 | Windows 10, OpenSSH 8.1, W3 | the prompt hang (recorded, expected) | not run | manual |
