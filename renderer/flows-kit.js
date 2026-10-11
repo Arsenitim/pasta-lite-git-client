@@ -240,12 +240,12 @@
 
   // W6 gate (docs/plans/ssh-remote-errors.md §4.5 and §10 Q9): the Windows hint recommends Windows'
   // own OpenSSH as core.sshCommand only once manual QA row W6 showed that it doesn't hang after a
-  // successful connection. Until then this stays false: the hint leads with Pageant (what works
-  // with Git for Windows' own ssh in an app started from the Start menu) and gives the ssh-agent
-  // service's steps only to those whose git runs Windows' OpenSSH already. Set it to true (and
-  // update the hint's test in test/flows.test.js) when W6 passes.
-  const RECOMMEND_WINDOWS_OPENSSH = false;
-  const SERVICE_STEPS = 'its ssh-agent service is disabled by default. In an administrator PowerShell: Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent, then ssh-add';
+  // successful connection. W6 passed on a desktop (§13), so it is on: the hint gives both setups,
+  // Pageant for Git for Windows' own ssh and the ssh-agent service (plus core.sshCommand) for
+  // Windows' OpenSSH. Off, only those whose git runs Windows' OpenSSH already get the service's steps.
+  const RECOMMEND_WINDOWS_OPENSSH = true;
+  const SERVICE_STEPS = 'Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent, then ssh-add';
+  const RUNS_OPENSSH = 'core.sshCommand or GIT_SSH_COMMAND names it, or Git for Windows was installed with "Use external OpenSSH"';
 
   /**
    * How to make the key usable without a prompt on `platform`. Windows: Git for Windows' own ssh
@@ -258,12 +258,14 @@
       return 'On macOS: ssh-add --apple-use-keychain ~/.ssh/<key>, and in ~/.ssh/config UseKeychain yes and AddKeysToAgent yes, so the key comes back after a restart.';
     }
     if (platform === 'win32') {
-      const openSsh = windowsOpenSsh
-        ? `Or let git use Windows' OpenSSH and its ssh-agent service: git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe; ${SERVICE_STEPS}.`
-        : `If git runs Windows' own OpenSSH (core.sshCommand or GIT_SSH_COMMAND names it, or Git for Windows was installed with "Use external OpenSSH"): ${SERVICE_STEPS}.`;
-      return 'Git for Windows\' own ssh can\'t use a key that needs its passphrase here, and it doesn\'t use Windows\' ssh-agent service. '
-        + 'Load the key in PuTTY\'s Pageant and set the GIT_SSH environment variable to PuTTY\'s plink.exe; restart Pasta Lite after setting it (it reads its environment when it starts).'
-        + `\n\n${openSsh}`;
+      const pageant = 'Load the key in PuTTY\'s Pageant and set the GIT_SSH environment variable to PuTTY\'s plink.exe; restart Pasta Lite after setting it (it reads its environment when it starts).';
+      if (windowsOpenSsh) {
+        return `With Git for Windows' own ssh (the default), a key that needs its passphrase can't be used here, and Windows' ssh-agent service isn't used. ${pageant}`
+          + `\n\nWith Windows' own OpenSSH, use its ssh-agent service (disabled by default). In an administrator PowerShell: ${SERVICE_STEPS}. `
+          + `Then let git use it: git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe (not needed if ${RUNS_OPENSSH}).`;
+      }
+      return `Git for Windows' own ssh can't use a key that needs its passphrase here, and it doesn't use Windows' ssh-agent service. ${pageant}`
+        + `\n\nIf git runs Windows' own OpenSSH (${RUNS_OPENSSH}): its ssh-agent service is disabled by default. In an administrator PowerShell: ${SERVICE_STEPS}.`;
     }
     return 'Add it with ssh-add ~/.ssh/<key> in the session Pasta Lite was started from (it needs that session\'s SSH_AUTH_SOCK).';
   }
