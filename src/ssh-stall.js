@@ -9,7 +9,7 @@
 // caller reports the failure ssh named (isStall). spawnGit stays unaware of ssh.
 //
 // createSshWatch({stallMs, onStall, setTimer, clearTimer}) -> {chunk(buf), lines(), text(), fired,
-//   stop(), signalFor(signal), isStall(err, signal), logStall(op, err)}
+//   stop(), signalFor(signal), isStall(err, signal), stallKind(err), logStall(op, err)}
 // defaultStallMs(platform) -> 10000 on Windows (where the hang is), 0 (no timer) elsewhere.
 // saidOf(facts) -> {kind, line}: what ssh said (sshFacts of the watch's lines), as a cancel's
 //   explanation carries it to the page (redacted, visible characters only, bounded).
@@ -25,7 +25,7 @@
 // non-empty line disarms it; empty lines never do. It fires once. With `stallMs` 0 the watch only
 // collects lines.
 const { StringDecoder } = require('node:string_decoder');
-const { SSH_ENDINGS } = require('./ssh-text');
+const { SSH_ENDINGS, sshFacts } = require('./ssh-text');
 const { redactString } = require('./redact');
 const { INVISIBLE } = require('./display-text');
 const { logger } = require('./log');
@@ -52,7 +52,9 @@ const isEnding = (line) => SSH_ENDINGS.some((re) => re.test(line));
  * own abort combined (AbortSignal.any; without an op signal, a test, the watch's alone), else
  * `signal` as it is. isStall(err, signal): true when the watch ended git (`err` the 'aborted' of
  * its kill) and the user didn't (`signal` not aborted: a cancel at the same moment wins).
- * logStall(op, err): the record of a stall (the kind and the timer, no text). A listener that
+ * stallKind(err): 'host-key' for a stalled, still unclassified `err` whose ssh lines are a changed
+ * host key's warning without its last line, or a lone '@@@' frame (sshFacts: Windows' own OpenSSH
+ * passes only its first write), else null. logStall(op, err): the record of a stall (the kind and the timer, no text). A listener that
  * throws is ignored.
  */
 function createSshWatch({ stallMs = 0, onStall = () => {}, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
@@ -113,6 +115,11 @@ function createSshWatch({ stallMs = 0, onStall = () => {}, setTimer = setTimeout
     },
     signalFor: (signal) => (stallMs > 0 ? AbortSignal.any([signal, stall.signal].filter(Boolean)) : signal),
     isStall: (err, signal) => fired && !!err && err.kind === 'aborted' && !(signal && signal.aborted),
+    stallKind(err) {
+      if (!err || !err.stalled || err.kind) return null;
+      const facts = sshFacts(kept);
+      return facts && facts.kind === 'host-key' && facts.changed ? 'host-key' : null;
+    },
     logStall: (op, err) => log.warn('ssh stalled after its error; git was ended', { op, kind: (err && err.kind) || null, ms: stallMs }),
   };
 }

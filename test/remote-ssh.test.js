@@ -310,6 +310,26 @@ test('no false kill: a wrapper that retries and succeeds within the window; a pr
   assert.equal(h.git(r.remote, 'rev-parse', 'main').trim(), again);
 });
 
+test('W8: ssh passes only the "@@@" frame of its changed-key warning and hangs (Windows\' OpenSSH): fetch, pull, push and clone end as host-key, changed, bannerOnly', async (t) => {
+  fakeSsh(t, 'banner-hang');
+  for (const [op, run] of Object.entries({
+    fetch: (r) => remote.fetch(r.local, { remote: 'origin', stallMs: 500 }),
+    pull: (r) => pull(r.local, { mode: 'ff-only', stallMs: 500 }),
+    push: (r) => remote.push(r.local, { branch: 'main', stallMs: 500 }),
+    clone: (r) => cloneRepo({ source: r.url, parent: h.tmpDir(), name: 'c', stallMs: 500 }),
+  })) {
+    const err = await failure(run(sshRepo()));
+    assert.equal(err.kind, 'host-key', `${op}: ${err.message}`);
+    assert.equal(err.stalled, true, op);
+    assert.equal(err.ssh.changed, true, op);
+    assert.equal(err.ssh.bannerOnly, true, op);
+    assert.equal(err.ssh.fingerprint, undefined, `${op}: ssh said none`);
+    assert.equal(err.ssh.keyName, undefined, op);
+    assert.match(err.message, /^@{59}$/m, op);
+    if (op !== 'clone') assert.equal(err.ssh.host, 'fake.invalid', `${op}: ssh-keygen -R falls back to the URL's host`);
+  }
+});
+
 test('Windows: a stall ends git\'s whole tree, the hanging ssh included (as a cancel does)', { skip: process.platform !== 'win32' && 'Windows: taskkill /T of git\'s tree' }, async (t) => {
   const pidFile = path.join(h.tmpDir(), 'ssh.pid');
   const out = outFile();

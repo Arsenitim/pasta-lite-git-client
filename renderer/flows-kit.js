@@ -308,6 +308,15 @@
     const host = hostText(ssh && ssh.host);
     switch (kind) {
       case 'host-key':
+        if (ssh && ssh.changed && ssh.bannerOnly) {
+          // All ssh passed on was the '@@@' frame of a security warning (Windows' own OpenSSH
+          // passes git its first line alone): most likely a changed host key, but it can't be told.
+          return {
+            title: 'ssh stopped at a security warning',
+            message: `ssh stopped at a security warning about ${host} and passed only its first line here. Most often the server's host key changed: someone may be intercepting the connection, or the server was reinstalled. `
+              + `Run ${sshCommandText(ssh)} in a terminal to read the whole warning. If it says the host key changed, check the key with the server's admin or its published fingerprints before you remove the saved one (${keygenText(ssh, platform)}).`,
+          };
+        }
         if (ssh && ssh.changed) {
           return {
             title: 'The server\'s host key changed',

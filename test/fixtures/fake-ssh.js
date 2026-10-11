@@ -14,6 +14,8 @@
 //   deny-hang, hostkey-hang, unreachable-hang, changed-hang, kex-hang   print that failure's lines
 //              (with '\r\n', as Windows writes them; kex: "kex_exchange_identification: read:
 //              Connection reset by peer") and never exit (Windows' OpenSSH on a pipe)
+//   banner-hang     print only the '@@@…' frame of the changed-key warning, as one write, and never
+//              exit: Windows' OpenSSH passes git its first write alone (QA row W8)
 //   proxyjump-hang  a jump host's publickey refusal, FAKE_SSH_DELAY ms (default 300) later the
 //              outer ssh's "Connection closed by UNKNOWN port 65535", then never exit
 //   silent-hang     print nothing and never exit (the prompt hang)
@@ -68,6 +70,7 @@ const LINES = {
   ],
   'too-many': () => ['Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures', 'Disconnected from 192.0.2.1 port 22'],
   kex: () => ['kex_exchange_identification: read: Connection reset by peer'],
+  banner: () => ['@'.repeat(59)],
 };
 const DELAY = Number(env.FAKE_SSH_DELAY) || 300;
 
@@ -106,7 +109,7 @@ function serve() {
   child.on('exit', (code) => process.exit(code === null ? 255 : code));
 }
 
-const hangs = /^(deny|hostkey|unreachable|changed|kex)-hang$/.exec(mode);
+const hangs = /^(deny|hostkey|unreachable|changed|kex|banner)-hang$/.exec(mode);
 if (mode === 'serve') serve();
 else if (mode === 'not-found') fail(['ERROR: Repository not found.'], 1);
 else if (hangs) say(LINES[hangs[1]](), hang);

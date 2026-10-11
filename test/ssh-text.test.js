@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { SSH_LINES, SSH_ENDINGS, TOO_MANY, sshFacts, splitRemote, sshCommand, asciiHost, unbracket, userOk } = require('../src/ssh-text');
+const { SSH_LINES, SSH_ENDINGS, TOO_MANY, BANNER, sshFacts, splitRemote, sshCommand, asciiHost, unbracket, userOk } = require('../src/ssh-text');
 
 const SRC = path.join(__dirname, '..', 'src', 'ssh-text.js');
 const kindOf = (line) => ['auth', 'host-key', 'unreachable'].find((k) => SSH_LINES[k].some((re) => re.test(line))) || null;
@@ -100,12 +100,12 @@ test('SSH_ENDINGS: every SSH_LINES pattern, and the endings that classify to not
 
 test('sshFacts: the last ssh line wins; its user@host; a changed key with its fingerprint; null for none', () => {
   assert.deepEqual(sshFacts(['az@127.0.0.1: Permission denied (publickey).', 'fatal: Could not read from remote repository.']),
-    { kind: 'auth', line: 'az@127.0.0.1: Permission denied (publickey).', user: 'az', host: '127.0.0.1', changed: false, fingerprint: null, keyName: null });
+    { kind: 'auth', line: 'az@127.0.0.1: Permission denied (publickey).', user: 'az', host: '127.0.0.1', changed: false, fingerprint: null, keyName: null, bannerOnly: false });
   // V16: an alias resolved by ssh (the line names the HostName, no port).
   assert.equal(sshFacts(['az@127.0.0.1: Permission denied (publickey).\r']).line, 'az@127.0.0.1: Permission denied (publickey).', 'no \\r');
   // V8: two host-key lines, the last one counts.
   const v8 = sshFacts(['No ED25519 host key is known for [127.0.0.1]:22222 and you have requested strict checking.', 'Host key verification failed.']);
-  assert.deepEqual(v8, { kind: 'host-key', line: 'Host key verification failed.', user: null, host: null, changed: false, fingerprint: null, keyName: null });
+  assert.deepEqual(v8, { kind: 'host-key', line: 'Host key verification failed.', user: null, host: null, changed: false, fingerprint: null, keyName: null, bannerOnly: false });
   // V9: changed, with the fingerprint, also with '\r\n' line ends.
   for (const lines of [CHANGED, CHANGED.map((l) => `${l}\r`)]) {
     const f = sshFacts(lines);
@@ -212,4 +212,37 @@ test('the one user rule (userOk, shared with src/clone-url.js); unbracket', () =
   assert.equal(userOk('git'), true);
   assert.equal(unbracket('[::1]'), '::1');
   assert.equal(unbracket('h'), 'h');
+});
+
+// The frames of ssh's other security warnings (OpenSSH's own wording).
+const UNPROTECTED = ['@'.repeat(59), '@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @', '@'.repeat(59),
+  "Permissions 0644 for '/home/u/.ssh/id_ed25519' are too open.", 'This private key will be ignored.'];
+const SPOOFING = ['@'.repeat(59), '@       WARNING: POSSIBLE DNS SPOOFING DETECTED!          @', '@'.repeat(59),
+  'The ED25519 host key for h has changed,', 'and the key for the corresponding IP address 192.0.2.7', 'is unknown.'];
+
+test('BANNER (W8): a line of "@" alone is an ending, so a Windows OpenSSH that passes only that first line still arms the watch', () => {
+  assert.ok(BANNER.test('@'.repeat(59)));
+  assert.ok(BANNER.test(`${'@'.repeat(59)}\r`));
+  assert.ok(SSH_ENDINGS.includes(BANNER));
+  for (const line of ['@'.repeat(19), `x${'@'.repeat(30)}`, `${'@'.repeat(30)} x`, '@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @']) {
+    assert.equal(BANNER.test(line), false, line);
+  }
+});
+
+test('sshFacts: a lone banner reads as a changed host key (bannerOnly: it can\'t be told apart from another warning); other warnings named, or a full block, read as before', () => {
+  const banner = '@'.repeat(59);
+  assert.deepEqual(sshFacts(["Cloning into 'r'...", `${banner}\r`]),
+    { kind: 'host-key', line: banner, user: null, host: null, changed: true, fingerprint: null, keyName: null, bannerOnly: true });
+  assert.equal(sshFacts([banner]).bannerOnly, true, 'also when it is the only line');
+  assert.equal(sshFacts(UNPROTECTED), null, 'an unprotected key file: not a host key');
+  assert.equal(sshFacts(SPOOFING), null, 'possible DNS spoofing: not labelled a changed key');
+  // The bundled ssh's full block: unchanged (the last line decides; first fingerprint and name).
+  const full = sshFacts(CHANGED);
+  assert.deepEqual([full.kind, full.line, full.changed, full.fingerprint, full.keyName, full.bannerOnly],
+    ['host-key', 'Host key verification failed.', true, FP, '[127.0.0.1]:22222', false]);
+  // The warning without its last line (cut short): still a changed key, with what it said.
+  const cut = sshFacts(CHANGED.slice(0, -2));
+  assert.deepEqual([cut.kind, cut.changed, cut.fingerprint, cut.keyName, cut.bannerOnly], ['host-key', true, FP, '[127.0.0.1]:22222', false]);
+  // A refusal after an unprotected key's warning is the refusal.
+  assert.equal(sshFacts([...UNPROTECTED, 'git@h: Permission denied (publickey).']).kind, 'auth');
 });

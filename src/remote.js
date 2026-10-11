@@ -80,7 +80,7 @@ const sameHost = (a, b) => unbracket(a).toLowerCase() === unbracket(b).toLowerCa
 
 /**
  * The ssh target of an 'auth' or 'host-key' failure of `remote`, for the message's `ssh -T`
- * command: {host?, port?, user?, shownAs?, changed?, fingerprint?, keyName?}, or null when the
+ * command: {host?, port?, user?, shownAs?, changed?, fingerprint?, keyName?, bannerOnly?}, or null when the
  * remote's URL is no ssh URL splitRemote can show (an https remote's auth text stays as it is).
  * The host and the port come from the URL git used (`remote get-url` applies insteadOf /
  * pushInsteadOf), never from ssh's line, which names the resolved host and no alias: that one is
@@ -89,7 +89,8 @@ const sameHost = (a, b) => unbracket(a).toLowerCase() === unbracket(b).toLowerCa
  * ssh's effective one (`facts.user`, which includes a User from ~/.ssh/config) when userOk accepts
  * it and ssh named the URL's own host (with ProxyJump the refusal may be the jump host's, whose user
  * is no target's), else the URL's (splitRemote: userOk too). A changed key's `keyName` is the
- * known_hosts name ssh printed (the resolved host, '[host]:port'), which `ssh-keygen -R` needs.
+ * known_hosts name ssh printed (the resolved host, '[host]:port'), which `ssh-keygen -R` needs;
+ * `bannerOnly`: all ssh passed on was a warning's '@@@' frame (a changed key, or another warning).
  * `facts`: sshFacts of git's stderr, or null. Never rejects: no signal (a cancel's explanation asks
  * too), a 10 s timeout, and a broken config is no target.
  */
@@ -111,6 +112,7 @@ async function sshTarget(cwd, remote, facts, { push = false } = {}) {
   if (facts && facts.changed) ssh.changed = true;
   if (facts && facts.fingerprint) ssh.fingerprint = facts.fingerprint;
   if (facts && facts.keyName) ssh.keyName = facts.keyName;
+  if (facts && facts.bannerOnly) ssh.bannerOnly = true;
   return ssh;
 }
 
@@ -197,7 +199,9 @@ async function fetchRemote(cwd, remote, opts, skipTags = []) {
     // A connection failure (the anchored patterns push and clone use), or "refusing to fetch into
     // branch 'refs/heads/x' checked out at '<path>'": the refspec writes local branches and a
     // worktree has that one checked out (git's message kept).
-    const kind = gitErrors.kindFor(err, ...gitErrors.CONNECT_RULES, 'checkedOutElsewhere');
+    // A stall whose ssh lines are only a security warning's '@@@' frame (Windows' OpenSSH passes
+    // its first write alone): a changed host key, or another warning (watch.stallKind).
+    const kind = gitErrors.kindFor(err, ...gitErrors.CONNECT_RULES, 'checkedOutElsewhere') || watch.stallKind(err);
     if (kind) tagError(err, kind, await sshOf(cwd, remote, kind, facts));
     if (err.stalled) watch.logStall('fetch', err);
     if (kind || err.stalled) throw err;
@@ -274,7 +278,7 @@ async function push(cwd, { remote, branch, remoteBranch, force, signal, timeout,
   } catch (e) {
     const err = unstall(e, watch, signal);
     const facts = sshFacts(watch.lines());
-    const c = gitErrors.unclassified(err) && gitErrors.classifyPush(err);
+    const c = (gitErrors.unclassified(err) && gitErrors.classifyPush(err)) || (watch.stallKind(err) ? { kind: watch.stallKind(err), extra: {} } : null);
     if (c) tagError(err, c.kind, { ...c.extra, ...(await sshOf(cwd, target, c.kind, facts, { push: true })) });
     else if (userCancel(err, signal)) await cancelSaid(cwd, target, err, facts, { push: true });
     if (err.stalled) watch.logStall('push', err);

@@ -223,6 +223,8 @@ async function cloneRepo({ source, parent, name, onProgress, onMade, signal, pla
     const out = classified(err, text, watch.lines());
     if (stalled) {
       out.stalled = true;
+      // Only a security warning's '@@@' frame (Windows' OpenSSH passes its first write alone).
+      if (watch.stallKind(out)) Object.assign(tagError(out, watch.stallKind(out)), changedKey(sshFacts(watch.lines())));
       watch.logStall('clone', out);
     }
     throw withMade(out, made);
@@ -261,7 +263,12 @@ const told = (text) => text.split('\n').filter((l) => !/^Cloning into /.test(l))
  */
 function changedKey(facts) {
   if (!facts || !facts.changed) return {};
-  return { ssh: { changed: true, ...(facts.fingerprint ? { fingerprint: facts.fingerprint } : {}), ...(facts.keyName ? { keyName: facts.keyName } : {}) } };
+  return {
+    ssh: {
+      changed: true, ...(facts.fingerprint ? { fingerprint: facts.fingerprint } : {}), ...(facts.keyName ? { keyName: facts.keyName } : {}),
+      ...(facts.bannerOnly ? { bannerOnly: true } : {}),
+    },
+  };
 }
 
 /** A user's cancel `err` with what ssh said before it (`said`, from the watch's `lines`), if anything. */

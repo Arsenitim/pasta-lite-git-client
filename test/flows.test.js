@@ -320,6 +320,20 @@ test('a changed host key: ssh-keygen -R names the key ssh printed (an alias\'s r
   assert.ok(view('linux', { keyName: undefined, host: '[::1]', port: 2222 }).includes("(ssh-keygen -R '[::1]:2222')"));
 });
 
+test('W8: only a warning\'s "@@@" frame (bannerOnly): a security warning, most likely a changed key; the whole warning from a terminal; never "accept"', async () => {
+  const ssh = { host: 'h.example', user: 'git', changed: true, bannerOnly: true };
+  for (const op of ['fetch', 'pull', 'push']) {
+    const s = await setup({}, { [op]: () => { throw err('host-key', '@'.repeat(59), { ssh, remote: 'origin' }); } });
+    await s.F[op](s.store);
+    const { title, message } = s.dialogs[0].opts;
+    assert.equal(title, 'ssh stopped at a security warning', op);
+    assert.match(message, /^ssh stopped at a security warning about h\.example and passed only its first line here\. Most often the server's host key changed/);
+    assert.ok(message.includes('Run ssh -T git@h.example in a terminal to read the whole warning.'), message);
+    assert.ok(message.includes('(ssh-keygen -R h.example)'), 'the URL\'s host: ssh named no key');
+    assert.doesNotMatch(message, /accept|StrictHostKeyChecking|\(SHA256/i, op);
+  }
+});
+
 test('the ssh -T command: no host (several push URLs) and an IDN host in its ASCII form', async () => {
   let s = await setup({}, { push: () => { throw err('host-key', 'x', { ssh: { user: 'git' }, remote: 'origin' }); } });
   await s.F.push(s.store);

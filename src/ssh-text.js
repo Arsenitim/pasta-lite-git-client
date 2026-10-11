@@ -12,9 +12,11 @@
  *   or a ref name can't fake one mid-line), each tolerating the '\r' of Windows' '\r\n'. `changed`
  *   (a host key that changed) is a fact, not a kind: its kind is 'host-key'.
  * SSH_ENDINGS: every SSH_LINES pattern plus the endings ssh prints that classify to nothing (the
- *   watchdog arms on them). A normal "Received disconnect … 11: Bye" is no ending.
+ *   watchdog arms on them). A normal "Received disconnect … 11: Bye" is no ending; the bare
+ *   '@@@…' frame of ssh's security warnings is one (BANNER: Windows' own OpenSSH passes git only
+ *   its first write, which for a changed host key is that frame alone).
  * TOO_MANY: the "Too many authentication failures" disconnect (an 'auth' line of its own).
- * sshFacts(lines) -> {kind, line, user, host, changed, fingerprint, keyName} | null.
+ * sshFacts(lines) -> {kind, line, user, host, changed, fingerprint, keyName, bannerOnly} | null.
  * splitRemote(url) -> {host, port, user} | null: a lenient, shell-safe split of a configured remote.
  * sshCommand({host, port, user}) -> 'ssh -T [-p <port>] [<user>@]<host>'.
  * asciiHost(host) -> the host's ASCII (punycode) form; unbracket(host): an IPv6 host without '[]'.
@@ -49,8 +51,15 @@
     ]),
   });
 
+  // The frame around ssh's security warnings (a changed host key, an unprotected key file, possible
+  // DNS spoofing): a line of '@' alone.
+  const BANNER = /^@{20,}\r?$/;
+  // The warning a frame holds, when it isn't a changed host key's.
+  const OTHER_WARNING = /^@+\s*WARNING: (?!REMOTE HOST IDENTIFICATION HAS CHANGED)/;
+
   const SSH_ENDINGS = Object.freeze([
     ...Object.values(SSH_LINES).flat(),
+    BANNER,
     /^kex_exchange_identification: /,
     /^Connection closed by /,
     /^Connection reset by /,
@@ -82,7 +91,10 @@
    * when ssh said the host key changed; then `fingerprint`, the key it was sent ('SHA256:…'), and
    * `keyName`, the known_hosts name of the saved key ('[127.0.0.1]:22222'; KEY_NAME only), each the
    * FIRST after the warning: a later block (a server's banner can print anything) never replaces
-   * them; null when ssh said none. null when no line is ssh's.
+   * them; null when ssh said none. Without a line of a kind, a changed key's warning still reads as
+   * 'host-key' (changed), and so does a lone BANNER with no other warning named (`bannerOnly`:
+   * Windows' own OpenSSH passed only its first line, so all that is known is "a changed host key,
+   * or another ssh security warning"). null when no line is ssh's.
    */
   function sshFacts(lines) {
     const list = Array.isArray(lines) ? lines.map((l) => String(l)) : [];
@@ -101,7 +113,14 @@
       const kind = KINDS.find((k) => any(SSH_LINES[k], l));
       if (kind) hit = { kind, line: l.replace(/\r$/, '') };
     });
-    if (!hit) return null;
+    if (!hit) {
+      const banner = list.find((l) => BANNER.test(l));
+      if (changed || (banner && !list.some((l) => OTHER_WARNING.test(l)))) {
+        const line = (changed ? list.find((l) => any(SSH_LINES.changed, l)) : banner).replace(/\r$/, '');
+        return { kind: 'host-key', line, user: null, host: null, changed: true, fingerprint, keyName, bannerOnly: !changed };
+      }
+      return null;
+    }
     let user = null;
     let host = null;
     const cut = hit.kind === 'auth' ? hit.line.indexOf(PERMISSION_DENIED) : -1;
@@ -113,7 +132,7 @@
         host = who.slice(at + 1);
       }
     }
-    return { kind: hit.kind, line: hit.line, user, host, changed, fingerprint, keyName };
+    return { kind: hit.kind, line: hit.line, user, host, changed, fingerprint, keyName, bannerOnly: false };
   }
 
   // A user name the app shows or keeps in a URL (clone-repository.md §13 Q7): never an option
@@ -200,6 +219,7 @@
   exports.SSH_LINES = SSH_LINES;
   exports.SSH_ENDINGS = SSH_ENDINGS;
   exports.TOO_MANY = TOO_MANY;
+  exports.BANNER = BANNER;
   exports.sshFacts = sshFacts;
   exports.splitRemote = splitRemote;
   exports.sshCommand = sshCommand;

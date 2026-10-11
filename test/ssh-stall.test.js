@@ -223,3 +223,24 @@ test('a normal disconnect ("Received disconnect … 11: Bye") followed by silenc
   tick();
   assert.equal(stalls(), 1);
 });
+
+test('W8: a lone "@@@" frame (Windows\' OpenSSH passes only its first write) arms and fires; stallKind reads it as host-key', () => {
+  const { w, timers, tick, stalls } = watch(500);
+  feed(w, `${'@'.repeat(59)}\r\n`);
+  assert.equal(timers.size, 1);
+  tick();
+  assert.equal(stalls(), 1);
+  const stalled = Object.assign(new Error('x'), { stalled: true, kind: undefined });
+  assert.equal(w.stallKind(stalled), 'host-key');
+  assert.equal(w.stallKind(Object.assign(new Error('x'), { stalled: false })), null, 'not a stall');
+  assert.equal(w.stallKind(Object.assign(new Error('x'), { stalled: true, kind: 'auth' })), null, 'classified already');
+});
+
+test('W8: the bundled ssh\'s warnings end disarmed (their text follows the frame), and an unprotected key\'s frame is no host key', () => {
+  const unprotected = ['@'.repeat(59), '@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @', '@'.repeat(59),
+    "Permissions 0644 for '/home/u/.ssh/id_ed25519' are too open.", 'This private key will be ignored.'];
+  const { w, timers } = watch(500);
+  feed(w, unprotected.map((l) => `${l}\n`).join(''));
+  assert.equal(timers.size, 0, 'ssh went on (another key): no stall');
+  assert.equal(w.stallKind(Object.assign(new Error('x'), { stalled: true })), null);
+});
