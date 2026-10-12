@@ -12,6 +12,7 @@ const h = require('./helpers');
 const remote = require('../src/remote');
 const { pull } = require('../src/pull');
 const { cloneRepo } = require('../src/clone');
+const { STALL_MS } = require('../src/ssh-stall');
 
 const { slashes, fakeSsh, printedAt } = h;
 
@@ -290,23 +291,29 @@ test('said is redacted: a token-shaped user in ssh\'s line is masked', async (t)
   assert.equal(err.ssh.user, undefined, 'and never the user of the command');
 });
 
+// The window is the app's own (STALL_MS, Windows' default), not a shorter one: the silence the
+// watch measures runs from ssh's line to git's exit, since a working transfer prints nothing on
+// stderr (fetch and push run without --progress). So the window holds the retry's delay (or the
+// hook's second) and the whole rest of the op: the server git's start, the transfer, git's own
+// checks and exits. That rest took about 2 s on a GitHub Windows runner (the whole test 4-8 s
+// there, 1.6 s on Linux), where a 2 s window once ended the fetch as stalled.
 test('no false kill: a wrapper that retries and succeeds within the window; a pre-push hook that prints ssh\'s line and goes on', async (t) => {
   const r = sshRepo();
   fakeSsh(t, 'deny-then-serve', { repo: r.remote, env: { FAKE_SSH_DELAY: '200' } });
   const sha = h.commitFile(r.seed, 'b.txt', 'b\n', 'second');
   h.git(r.seed, 'push', '-q', 'origin', 'main');
-  await remote.fetch(r.local, { remote: 'origin', stallMs: 2000 });
+  await remote.fetch(r.local, { remote: 'origin', stallMs: STALL_MS });
   assert.equal(h.git(r.local, 'rev-parse', 'origin/main').trim(), sha);
   h.git(r.local, 'merge', '-q', '--ff-only', 'origin/main');
   const mine = h.commitFile(r.local, 'c.txt', 'c\n', 'third');
-  await remote.push(r.local, { branch: 'main', stallMs: 2000 });
+  await remote.push(r.local, { branch: 'main', stallMs: STALL_MS });
   assert.equal(h.git(r.remote, 'rev-parse', 'main').trim(), mine);
   // A hook that prints ssh's exact line, then works on for a second: shorter than the window.
   process.env.FAKE_SSH_MODE = 'serve';
   h.write(r.local, '.git/hooks/pre-push', '#!/bin/sh\necho "git@fake.invalid: Permission denied (publickey)." >&2\nsleep 1\nexit 0\n');
   fs.chmodSync(path.join(r.local, '.git', 'hooks', 'pre-push'), 0o755);
   const again = h.commitFile(r.local, 'd.txt', 'd\n', 'fourth');
-  await remote.push(r.local, { branch: 'main', stallMs: 3000 });
+  await remote.push(r.local, { branch: 'main', stallMs: STALL_MS });
   assert.equal(h.git(r.remote, 'rev-parse', 'main').trim(), again);
 });
 
