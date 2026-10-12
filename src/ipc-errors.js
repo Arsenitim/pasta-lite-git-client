@@ -31,6 +31,11 @@ const EXTRA_FIELDS = [
   // Clone (docs/plans/clone-repository.md): `leftover`, the folder (as shown: '~/code/x') whose
   // removal is still running when an 'in-progress' refusal names it.
   'leftover',
+  // Remote ops (docs/plans/ssh-remote-errors.md §4.1): `ssh`, the ssh target of an 'auth' or
+  // 'host-key' failure ({host, port, user, shownAs, changed, fingerprint}: shell-safe parts only);
+  // `remote`, the configured remote a fetch or push failed on; `said`, what ssh said before a
+  // user's cancel ({kind, line}: the line redacted and bounded, src/ssh-stall.js saidOf).
+  'ssh', 'remote', 'said',
 ];
 // Nested errors, sent as their message string only.
 const NESTED_ERRORS = ['resetError', 'reapplyError'];

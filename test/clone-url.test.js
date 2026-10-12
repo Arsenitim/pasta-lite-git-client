@@ -191,11 +191,11 @@ test('nameError: one segment, not . / .., not too long, no .git; on Windows the 
   assert.equal(mac('GIT~1'), null);
 });
 
-test('the UMD file works as a plain browser script after display-text.js and path-names.js', () => {
+test('the UMD file works as a plain browser script after display-text.js, path-names.js and ssh-text.js', () => {
   const vm = require('node:vm');
   const window = {};
-  const ctx = vm.createContext({ window, TextEncoder });
-  for (const f of ['display-text.js', 'path-names.js', 'clone-url.js']) {
+  const ctx = vm.createContext({ window, TextEncoder, URL });
+  for (const f of ['display-text.js', 'path-names.js', 'ssh-text.js', 'clone-url.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8'), ctx);
   }
   assert.equal(window.PLCloneUrl.parseCloneUrl('git@host:o/r.git').kind, 'scp');
@@ -259,5 +259,22 @@ test('nameError on every platform: no leading dot (a dot-folder in home: ~/.conf
     for (const n of ['.config', '.ssh', '.aws', '.kube', '.gradle', '.x', '...']) assert.match(nameError(n, { platform }), /start with a dot|"\."|\.git/, `${platform} ${n}`);
     for (const n of ['a:b', 'host:repo.git', ':x']) assert.match(nameError(n, { platform }), /":"|can't contain </, `${platform} ${n}`);
     assert.equal(nameError('a.b', { platform }), null, 'a dot inside is fine');
+  }
+});
+
+test('port: a URL\'s port as a number (ssh -T -p in the clone dialog), none for scp-like and portless URLs', () => {
+  assert.equal(parseCloneUrl('ssh://git@h:2222/r.git').port, 2222);
+  assert.equal(parseCloneUrl('https://h:8443/r.git').port, 8443);
+  assert.equal(parseCloneUrl('ssh://git@h/r.git').port, null);
+  assert.equal(parseCloneUrl('git@h.example:o/r.git').port, null);
+});
+
+test('userOk: the clone rules\' user names, never a token-shaped one (main checks ssh\'s user with it)', () => {
+  const { userOk } = require('../src/clone-url');
+  for (const u of ['git', 'deploy', 'a.b_c-d', 'x1']) assert.equal(userOk(u), true, u);
+  // Token shapes built from parts, never written out.
+  const tokenish = ['gh', 'p_', 'A1b2'.repeat(9)].join('');
+  for (const u of [tokenish, 'Ab1'.repeat(9), '-oProxyCommand', 'a b', 'a$(id)', 'u'.repeat(40), '', null, undefined, 7]) {
+    assert.equal(userOk(u), false, String(u));
   }
 });

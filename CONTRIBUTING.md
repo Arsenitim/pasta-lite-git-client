@@ -302,6 +302,14 @@ Git runs in the Electron main process; the pages talk to it over IPC and never t
   The folder is written to `clone.json` as soon as it exists and dropped once the clone succeeds,
   so a quit, a crash or a git that outlives its kill can't abandon it: `before-quit` waits for
   that write, and the next launch finishes the removal. The page's side is `renderer/clone.js`.
+- **ssh failures** ([docs/plans/ssh-remote-errors.md](docs/plans/ssh-remote-errors.md)): ssh's
+  lines and the display of a remote's ssh target live in `src/ssh-text.js`, which requires nothing
+  (`src/git-errors.js` builds its connection rules from it) and is shared with the page like
+  `src/error-kinds.js`. The stall watchdog (`src/ssh-stall.js`: end a git whose ssh failed but
+  never exits, Windows by default) is built in the callers, `src/remote.js` and `src/clone.js`, on
+  `spawnGit`'s `onStderr` and an abort combined with the op's signal: the process layer knows
+  nothing about ssh. On Windows those two also give ssh Git for Windows' `false.exe` as its
+  askpass (`src/ssh-env.js`), only when the user set none.
 - **`test/`** has one `node:test` file per area. Git-layer tests run against throwaway repos
   (`test/helpers.js`); renderer tests load the scripts with a fake `window` and DOM
   (`test/renderer-harness.js`).

@@ -411,3 +411,30 @@ test('names the app refuses before git: a leading dot (~/.config would become th
   }
   assert.deepEqual(fs.readdirSync(parent), []);
 });
+
+// ---------------------------------------------------------------- ssh that fails and hangs (docs/plans/ssh-remote-errors.md §4.3)
+
+test('an ssh that prints its refusal and never exits: the watchdog ends the clone as auth, stalled; the cleanup removes the folder', async (t) => {
+  const bare = h.initRepo({ bare: true });
+  h.fakeSsh(t, 'deny-hang');
+  const t0 = Date.now();
+  const err = await rejectsWithMade(cloneRepo({ source: `fake.invalid:${h.slashes(bare)}`, parent: h.tmpDir(), name: 'r', stallMs: 500 }), 'auth');
+  assert.equal(err.stalled, true);
+  assert.match(err.message, /^git@fake\.invalid: Permission denied \(publickey\)\.$/m);
+  assert.doesNotMatch(err.message, /cancelled/);
+  assert.ok(Date.now() - t0 < 30000);
+  assert.equal(killChildren(), 0, 'no git child left');
+});
+
+test('a cancel while ssh hangs after "Host key verification failed.": aborted, with what ssh said', async (t) => {
+  const bare = h.initRepo({ bare: true });
+  const out = path.join(h.tmpDir(), 'out.json');
+  h.fakeSsh(t, 'hostkey-hang', { env: { FAKE_SSH_OUT: out } });
+  const ctrl = new AbortController();
+  const p = cloneRepo({ source: `fake.invalid:${h.slashes(bare)}`, parent: h.tmpDir(), name: 'r', signal: ctrl.signal, stallMs: 0 });
+  await h.printedAt(out);
+  ctrl.abort();
+  const err = await rejectsWithMade(p, 'aborted');
+  assert.deepEqual(err.said, { kind: 'host-key', line: 'Host key verification failed.' });
+  assert.equal(err.stalled, undefined);
+});

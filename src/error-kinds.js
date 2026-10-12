@@ -31,7 +31,7 @@
     exists: 'the folder to create already exists (a clone\'s target)',
     forbidden: 'the IPC sender may not call that channel',
     'hook-failed': 'a hook refused the operation (message: its output)',
-    'host-key': 'ssh doesn\'t know the remote\'s host key and can\'t ask (no terminal)',
+    'host-key': 'ssh doesn\'t know the remote\'s host key, or it changed (`ssh.changed`), and can\'t ask (no terminal)',
     'in-progress': 'another operation is in progress (`state`; \'autostash\' while an autostash waits)',
     'invalid-args': 'the renderer\'s arguments were refused by validation',
     'invalid-todo': 'an interactive rebase todo was refused',

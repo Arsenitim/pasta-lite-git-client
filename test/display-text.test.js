@@ -40,10 +40,10 @@ test('the UMD file works as a plain browser script (window.PLDisplayText)', () =
   assert.equal(window.PLDisplayText.hasInvisible('ok'), false);
 });
 
-test('index.html loads the shared scripts in order: display-text, path-names, clone-url, then components.js', () => {
+test('index.html loads the shared scripts in order: display-text, path-names, ssh-text, clone-url, then components.js and the flows', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
   const at = (src) => html.indexOf(`<script src="${src}"></script>`);
-  const order = ['../src/error-kinds.js', '../src/display-text.js', '../src/path-names.js', '../src/clone-url.js', 'components.js'].map(at);
+  const order = ['../src/error-kinds.js', '../src/display-text.js', '../src/path-names.js', '../src/ssh-text.js', '../src/clone-url.js', 'components.js', 'flows-kit.js'].map(at);
   assert.ok(order.every((i) => i >= 0), JSON.stringify(order));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
 });

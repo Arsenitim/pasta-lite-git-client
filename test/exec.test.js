@@ -722,47 +722,7 @@ test('lsUntracked: many paths go to ls-files in argv chunks (Windows command lin
   assert.equal(fs.existsSync(path.join(d, dirs[0], 'ignored.log')), true);
 });
 
-/**
- * Windows: which of the processes `pids` name run now, each as its identity `pid|image|start`
- * (Get-Process: the image name and the start time, no command lines). A pid alone doesn't name a
- * process: Windows hands a freed pid to the next process (under load another test's sleep had it
- * within 300 ms), and process.kill(pid, 0) ignores a pid's lowest two bits, so it answers for a
- * neighbour too. A process that got the pid later has another start time. `end`: identities to end
- * if they still run (in the same PowerShell, so never a process that got the pid meanwhile).
- */
-function winProcesses(pids, end = []) {
-  if (!pids.length) return [];
-  const { execFileSync } = require('node:child_process');
-  const { system32 } = require('../src/which');
-  const script = [
-    `$end = @(${end.map((id) => `'${id}'`).join(', ')})`,
-    `Get-Process -Id ${pids.map(Number).join(', ')} -ErrorAction SilentlyContinue | ForEach-Object {`,
-    '  $start = 0; try { $start = $_.StartTime.ToFileTimeUtc() } catch {}',
-    '  $id = \'{0}|{1}|{2}\' -f $_.Id, $_.ProcessName, $start',
-    '  if ($end -contains $id) { try { $_.Kill() } catch {} } else { $id }',
-    '}',
-    'exit 0',
-  ].join('\n');
-  const ps = path.win32.join(system32(), 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const out = execFileSync(ps, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 120000 });
-  return out.split(/\r?\n/).filter(Boolean);
-}
-/** Windows: the identities among `ids` (winProcesses) whose process still runs. */
-const stillRunning = (ids) => {
-  const now = winProcesses(ids.map((id) => id.split('|')[0]));
-  return ids.filter((id) => now.includes(id));
-};
-/**
- * Windows: the identities among `ids` that still run once the cancel settled. A killed process
- * ends a moment after TerminateProcess returns (seen 0-1 ms after the settle), so a few looks
- * within `ms`, which is far shorter than any sleep the test started.
- */
-async function runningAfterKill(ids, ms = 2000) {
-  for (const t0 = Date.now(); ; await new Promise((r) => setTimeout(r, 100))) {
-    const left = stillRunning(ids);
-    if (!left.length || Date.now() - t0 >= ms) return left;
-  }
-}
+const { winProcesses, stillRunning, runningAfterKill } = h;
 
 test('cancelling on Windows ends git, its hook and the MSYS commands the hook started (not through the Windows tree), and nothing else', { skip: process.platform !== 'win32' && 'Windows: taskkill and the MSYS processes of Git for Windows' }, async (t) => {
   const { spawn } = require('node:child_process');

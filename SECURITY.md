@@ -69,6 +69,18 @@ Examples of vulnerabilities in this area:
 - a way to get past the prompt, or to reuse a trust decision for a different repository or
   different settings
 
+**ssh on Windows.** Windows' own OpenSSH would otherwise wait for a key passphrase or a host-key
+answer on git's hidden console, where nobody can answer (seen on a desktop). So fetch, pull, push
+and clone run ssh with `SSH_ASKPASS` pointing at Git for Windows' own `false.exe` and
+`SSH_ASKPASS_REQUIRE=force`, and ssh fails instead of prompting. They don't when you set
+`SSH_ASKPASS` or `SSH_ASKPASS_REQUIRE` yourself, or when git has no `false.exe` next to it
+(MinGit). The hooks git runs for those commands (such as `pre-push`) inherit the two variables;
+other operations and their hooks never get them. On a Windows desktop an unknown host key and a
+passphrase-protected key through Windows' OpenSSH now fail within about a second, and `false.exe`
+opens no console window. Git Credential Manager's sign-in window over HTTPS (which can fall back
+to `SSH_ASKPASS` when it gets no answer) is still to be checked by hand
+([docs/plans/ssh-remote-errors.md](docs/plans/ssh-remote-errors.md) §13, W12).
+
 **Electron sandboxing.** Every page (the tab strip and each tab) runs with `contextIsolation`,
 `sandbox` and `webSecurity` on, with `nodeIntegration` off, and with a strict Content Security
 Policy. The packaged app has its Electron fuses set: it can't be run as plain Node

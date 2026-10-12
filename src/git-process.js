@@ -672,7 +672,7 @@ function argvChunks(paths, { maxCount = 1000, maxBytes = 64 * 1024, prefix = [],
 }
 
 module.exports = {
-  setGitBinary, withSignal, killChildren, MAX_OUTPUT_BYTES,
+  setGitBinary, gitExecutable, msysShell, withSignal, killChildren, MAX_OUTPUT_BYTES,
   GitError, kindError, tagError, abortedError, spawnGit, gitAt, tryGitAt, GLOBAL_ARGS, DIFF_ARGS, DIFF_OPTS, LITERAL_ENV, nulList, argvChunks,
   // exported for unit tests only
   _internal: {

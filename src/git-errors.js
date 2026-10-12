@@ -7,6 +7,8 @@
 // kind set further down is never overwritten.
 const { GitError, tagError } = require('./exec');
 const { HELPER_REFUSED } = require('./namespace');
+// ssh's own lines (src/ssh-text.js requires nothing, so loading it here closes no cycle with exec).
+const { SSH_LINES } = require('./ssh-text');
 
 /**
  * Rules: {re (one RegExp or a list: any), from, kind?}. `from` is the text tested: 'stderr',
@@ -29,7 +31,8 @@ const RULES = Object.freeze({
   uncommittedChanges: { re: /You have unstaged changes|Your index contains uncommitted changes/i, from: 'both', kind: 'dirty' },
   unrelatedHistories: { re: /refusing to merge unrelated histories/i, from: 'both', kind: 'unrelated-histories' },
   notFullyMerged: { re: /not fully merged/i, from: 'stderr', kind: 'not-merged' },
-  // Credential failures: only fatal: / remote: lines (anchored), never ref names or hook output.
+  // Credential failures: only fatal: / remote: lines and ssh's own `user@host: Permission denied
+  // (…).` and "Too many authentication failures" (anchored), never ref names or hook output.
   auth: {
     re: [
       /^fatal: Authentication failed/m,
@@ -38,7 +41,7 @@ const RULES = Object.freeze({
       /^fatal: .*The requested URL returned error: 40[13]\b/m,
       /^remote: .*\b403\b/m,
       /^remote: (Invalid username or password|Permission to \S+ denied)/m,
-      /Permission denied \(publickey/,
+      ...SSH_LINES.auth,
     ],
     from: 'stderr', kind: 'auth',
   },
@@ -72,9 +75,10 @@ const RULES = Object.freeze({
   },
   // Our rebase editor helper (src/rebase-editor.js) refused the todo or a message.
   helperRefused: { re: new RegExp(HELPER_REFUSED), from: 'both' },
-  // `git clone` (src/clone.js), tested against the progress parser's text lines only
-  // (src/clone-progress.js), anchored like auth. ssh ends every failure with "fatal: Could not read
-  // from remote repository.", so that line never decides: the one before it does.
+  // The connection rules (CONNECT_RULES: these two, auth and unreachable) and clone's own, tested
+  // against git's stderr of a fetch or push and against the progress parser's text lines of a
+  // clone (src/clone-progress.js), anchored like auth. ssh ends every failure with "fatal: Could
+  // not read from remote repository.", so that line never decides: the one before it does.
   // Not found: over http(s) and for a local path ("repository '<x>' not found / does not exist"),
   // from GitHub / GitLab over ssh, and from a plain upload-pack (file://, ssh to a path that isn't
   // a repository: "'<x>' does not appear to be a git repository").
@@ -87,13 +91,14 @@ const RULES = Object.freeze({
     ],
     from: 'stderr', kind: 'not-found',
   },
-  hostKey: { re: [/^Host key verification failed/m, /^No .* host key is known for/m], from: 'stderr', kind: 'host-key' },
+  // ssh doesn't know the host's key, or the key changed (SSH_LINES.changed: the same last line).
+  hostKey: { re: SSH_LINES['host-key'], from: 'stderr', kind: 'host-key' },
   unreachable: {
     re: [
       // curl's connection-level failures: no answer, refused, timed out, TLS, a connection dropped.
       /^fatal: unable to access '.*': (?:Could not resolve host|Failed to connect|Connection timed out|Couldn't connect|SSL|Recv failure|Send failure|Empty reply from server)/m,
-      /^ssh: Could not resolve hostname/m,
-      /^ssh: connect to host .* (?:Connection refused|Operation timed out|Connection timed out|Network is unreachable)/m,
+      // ssh: the host doesn't resolve, or the connection fails.
+      ...SSH_LINES.unreachable,
       // git:// (git daemon): the host doesn't resolve, or nothing answers.
       /^fatal: unable to (?:look up|connect to) /m,
     ],
@@ -111,6 +116,12 @@ const RULES = Object.freeze({
   notARepo: { re: /not a git repository|bare repository|must be run in a work tree/i, from: 'message' },
   bareRefused: { re: /cannot use bare repository/i, from: 'message' },
 });
+
+/**
+ * The connection failures every remote op (fetch, pull's fetch, push, clone) tells apart, in the
+ * order they are tried: credentials, the host key, a missing repository, an unreachable server.
+ */
+const CONNECT_RULES = Object.freeze(['auth', 'hostKey', 'remoteNotFound', 'unreachable']);
 
 /** The text rule field `from` names (see RULES). */
 function textOf(err, from) {
@@ -164,8 +175,9 @@ const rejectedFetchRefs = (stdout) => String(stdout || '').split('\n')
 
 /**
  * Classify a failed `push --porcelain`: the ref status lines (`!\t<src>:<dst>\t[flag] (reason)`
- * on stdout) are authoritative; only without them is stderr checked for auth failures, anchored
- * to fatal:/remote: lines so branch names or hook output can't trigger a false match.
+ * on stdout) are authoritative; only without them is stderr checked for the connection failures
+ * (CONNECT_RULES), anchored to fatal: / remote: / ssh's lines so branch names or hook output can't
+ * trigger a false match, then for a mirror's refusal.
  * @returns {{kind: string, extra: object}|null}
  */
 function classifyPush(err) {
@@ -184,7 +196,8 @@ function classifyPush(err) {
     if (reason === 'fetch first' || reason === 'stale info') return { kind: 'rejected-stale', extra };
     return { kind: 'rejected', extra };
   }
-  if (matches(err, 'auth')) return { kind: 'auth', extra: {} };
+  const connect = CONNECT_RULES.find((n) => matches(err, n));
+  if (connect) return { kind: RULES[connect].kind, extra: {} };
   if (matches(err, 'mirrorPush')) {
     return { kind: 'mirror-repo', extra: { message: 'This remote is set up as a mirror (remote.<name>.mirror): git would push every ref, deleting what the remote has and this repository lacks, so pushing one branch is not possible' } };
   }
@@ -192,5 +205,5 @@ function classifyPush(err) {
 }
 
 module.exports = {
-  RULES, textOf, matches, unclassified, kindFor, classify, failureKind, rejectedFetchRefs, classifyPush,
+  RULES, CONNECT_RULES, textOf, matches, unclassified, kindFor, classify, failureKind, rejectedFetchRefs, classifyPush,
 };

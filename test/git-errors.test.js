@@ -164,3 +164,61 @@ test('clone rules are anchored: ref names, hook output and stdout don\'t match',
   // stdout is never read by these rules.
   assert.equal(ge.kindFor(gitErr('', 'Host key verification failed.\nfatal: transport \'x\' not allowed\nNo space left on device'), ...RULE_ORDER), null);
 });
+
+// ---------------------------------------------------------------- connection failures (docs/plans/ssh-remote-errors.md)
+
+test('CONNECT_RULES: auth, host key, a missing repository, unreachable, in that order; clone tries them first', () => {
+  assert.deepEqual([...ge.CONNECT_RULES], ['auth', 'hostKey', 'remoteNotFound', 'unreachable']);
+  assert.ok(Object.isFrozen(ge.CONNECT_RULES));
+  const { RULE_ORDER } = require('../src/clone')._internal;
+  assert.deepEqual(RULE_ORDER.slice(0, 4), [...ge.CONNECT_RULES]);
+});
+
+test('auth: ssh\'s own user@host refusal and "Too many authentication failures"; anchored, so lookalikes don\'t count', () => {
+  for (const text of [
+    'git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.',
+    'git@github.com: Permission denied (publickey).\r\nfatal: Could not read from remote repository.\r\n',
+    'deploy@h: Permission denied (publickey,password).',
+    'Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures\nDisconnected from 192.0.2.1 port 22',
+  ]) {
+    assert.equal(ge.kindFor(gitErr(text), ...ge.CONNECT_RULES), 'auth', text);
+  }
+  for (const text of [
+    "error: unable to create 'x': Permission denied",
+    'remote: Permission denied (publickey)',
+    'hook: git@h: Permission denied (publickey).',
+    ' Permission denied (publickey).',
+  ]) {
+    assert.equal(ge.kindFor(gitErr(text), ...ge.CONNECT_RULES), null, text);
+  }
+  // Older and vendor ssh builds print the refusal without user@host: still ssh's own line.
+  assert.equal(ge.kindFor(gitErr('Permission denied (publickey).\r\nfatal: Could not read from remote repository.'), ...ge.CONNECT_RULES), 'auth');
+});
+
+test('unreachable: ssh\'s "No route to host" and "Host is down" too', () => {
+  for (const reason of ['No route to host', 'Host is down', 'Network is unreachable']) {
+    assert.equal(ge.kindFor(gitErr(`ssh: connect to host 10.0.0.9 port 22: ${reason}\nfatal: Could not read from remote repository.`), ...ge.CONNECT_RULES), 'unreachable', reason);
+  }
+});
+
+test('classifyPush: the ref lines still first, then every connection failure, then the mirror refusal', () => {
+  const push = (stdout, stderr = '') => ge.classifyPush(gitErr(stderr, stdout));
+  assert.equal(push('', 'Host key verification failed.\nfatal: Could not read from remote repository.').kind, 'host-key');
+  assert.equal(push('', 'ERROR: Repository not found.\nfatal: Could not read from remote repository.').kind, 'not-found');
+  assert.equal(push('', 'ssh: connect to host h port 22: Connection refused\nfatal: Could not read from remote repository.').kind, 'unreachable');
+  assert.equal(push('', 'git@h: Permission denied (publickey).').kind, 'auth');
+  assert.deepEqual(push('', 'git@h: Permission denied (publickey).').extra, {});
+  assert.equal(push('!\ta:a\t[rejected] (non-fast-forward)', 'Host key verification failed.').kind, 'rejected-behind', 'a ref line wins');
+  assert.equal(push('', "remote: hint: 'Host key verification failed.'\nfatal: --mirror can't be combined with refspecs").kind, 'mirror-repo');
+});
+
+test('git-errors.js loads first and alone, and after exec.js: src/ssh-text.js closes no require cycle', () => {
+  const { execFileSync } = require('node:child_process');
+  const src = (f) => JSON.stringify(require.resolve(`../src/${f}`));
+  for (const order of [['git-errors', 'exec'], ['exec', 'git-errors'], ['ssh-text', 'git-errors']]) {
+    const script = order.map((f) => `require(${src(f)});`).join('')
+      + `const g = require(${src('git-errors')}); if (typeof g.kindFor !== 'function' || !g.RULES.auth.re.length) process.exit(3);`
+      + `const x = require(${src('exec')}); if (typeof x.tagError !== 'function') process.exit(4);`;
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['-e', script], { stdio: 'pipe' }), order.join(' then '));
+  }
+});

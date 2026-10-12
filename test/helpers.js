@@ -119,9 +119,90 @@ function hostileConfig(dir) {
   for (const [k, v] of Object.entries(cfg)) git(dir, 'config', k, v);
 }
 
+/** `p` with forward slashes (a Windows path in a URL or a shell command). */
+const slashes = (p) => p.replace(/\\/g, '/');
+const FAKE_SSH = path.join(__dirname, 'fixtures', 'fake-ssh.js');
+
+/**
+ * Run git's ssh as the fake ssh (test/fixtures/fake-ssh.js) in `mode` for test `t`, its variables
+ * restored afterwards. `env`: more FAKE_SSH_* variables. `repo`: the repository `serve` serves,
+ * passed as FAKE_SSH_REPO on Windows (MSYS sh may convert the path in git's command; elsewhere the
+ * fake reads git's command). GIT_SSH_VARIANT=ssh: 'simple' (git's guess for an unknown command)
+ * refuses ssh://host:port.
+ */
+function fakeSsh(t, mode, { env = {}, repo } = {}) {
+  const vars = {
+    GIT_SSH_COMMAND: `"${slashes(process.execPath)}" "${slashes(FAKE_SSH)}"`,
+    GIT_SSH_VARIANT: 'ssh',
+    FAKE_SSH_MODE: mode,
+    ...(repo && process.platform === 'win32' ? { FAKE_SSH_REPO: repo } : {}),
+    ...env,
+  };
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, vars);
+  t.after(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+}
+
+/** {printedAt} of the fake ssh's FAKE_SSH_OUT `file` once it wrote it (its lines are out), within 60 s. */
+async function printedAt(file) {
+  for (const t0 = Date.now(); !fs.existsSync(file) || !fs.readFileSync(file, 'utf8'); await new Promise((r) => setTimeout(r, 20))) {
+    if (Date.now() - t0 >= 60000) throw new Error('the fake ssh never printed');
+  }
+  return JSON.parse(fs.readFileSync(file, 'utf8')).printedAt;
+}
+
+/**
+ * Windows: which of the processes `pids` name run now, each as its identity `pid|image|start`
+ * (Get-Process: the image name and the start time, no command lines). A pid alone doesn't name a
+ * process: Windows hands a freed pid to the next process (under load another test's sleep had it
+ * within 300 ms), and process.kill(pid, 0) ignores a pid's lowest two bits, so it answers for a
+ * neighbour too. A process that got the pid later has another start time. `end`: identities to end
+ * if they still run (in the same PowerShell, so never a process that got the pid meanwhile).
+ */
+function winProcesses(pids, end = []) {
+  if (!pids.length) return [];
+  const { system32 } = require('../src/which');
+  const script = [
+    `$end = @(${end.map((id) => `'${id}'`).join(', ')})`,
+    `Get-Process -Id ${pids.map(Number).join(', ')} -ErrorAction SilentlyContinue | ForEach-Object {`,
+    '  $start = 0; try { $start = $_.StartTime.ToFileTimeUtc() } catch {}',
+    '  $id = \'{0}|{1}|{2}\' -f $_.Id, $_.ProcessName, $start',
+    '  if ($end -contains $id) { try { $_.Kill() } catch {} } else { $id }',
+    '}',
+    'exit 0',
+  ].join('\n');
+  const ps = path.win32.join(system32(), 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const out = execFileSync(ps, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 120000 });
+  return out.split(/\r?\n/).filter(Boolean);
+}
+/** Windows: the identities among `ids` (winProcesses) whose process still runs. */
+const stillRunning = (ids) => {
+  const now = winProcesses(ids.map((id) => id.split('|')[0]));
+  return ids.filter((id) => now.includes(id));
+};
+/**
+ * Windows: the identities among `ids` that still run once the cancel settled. A killed process
+ * ends a moment after TerminateProcess returns (seen 0-1 ms after the settle), so a few looks
+ * within `ms`, which is far shorter than any sleep the test started.
+ */
+async function runningAfterKill(ids, ms = 2000) {
+  for (const t0 = Date.now(); ; await new Promise((r) => setTimeout(r, 100))) {
+    const left = stillRunning(ids);
+    if (!left.length || Date.now() - t0 >= ms) return left;
+  }
+}
+
 function cleanup() {
   for (const d of tmpDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 }
 process.on('exit', cleanup);
 
-module.exports = { tmpDir, globalConfig, git, initRepo, write, read, commitFile, repoWithRemote, bareWithWorktree, hostileConfig, cleanup };
+module.exports = {
+  tmpDir, globalConfig, git, initRepo, write, read, commitFile, repoWithRemote, bareWithWorktree, hostileConfig, cleanup,
+  slashes, fakeSsh, printedAt, winProcesses, stillRunning, runningAfterKill,
+};

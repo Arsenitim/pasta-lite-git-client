@@ -1104,7 +1104,12 @@ clone isn't. Until we know, the safeguards are the "Waiting…" notice with the 
 - **Windows' own OpenSSH** (System32, 9.5p2; used only when the user sets `core.sshCommand` or
   `GIT_SSH_COMMAND` to it) **hangs** in both cases, with or without BatchMode: it prints its
   error, then never exits while its stderr is a pipe (reproduced outside the app too). Cancel
-  always worked: the op settled about 120 ms after the abort, with no git or ssh left.
+  always worked: the op settled about 120 ms after the abort, with no git or ssh left. The
+  follow-up's Windows QA ([ssh-remote-errors.md](ssh-remote-errors.md) §13) showed that the
+  exit hang belongs to git running inside an sshd session (as this row ran): on an interactive
+  desktop Windows' OpenSSH exits after its error with its whole message, and works for a
+  successful connection. The hidden-prompt hang (an unknown host key, a passphrase) is real on
+  the desktop; the follow-up's askpass (S3) fixes it.
 
 So BatchMode is not applied: it would only apply when no ssh command is set, where the default ssh
 already fails fast, and it doesn't help Windows' OpenSSH. The safeguards for that setup stay the
@@ -1307,7 +1312,7 @@ macOS (M) and Windows 11 (W). Each item is run on both unless marked otherwise.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| SSH waiting on a hidden console on Windows (§9.3) | a clone that sits until cancelled | "Waiting…" + Cancel. QA row 6: the default ssh fails fast; only Windows' own OpenSSH (when the user sets it) hangs, and Cancel ends it; no BatchMode (§13 Q5). Follow-up in a separate PR (§15) |
+| SSH waiting on a hidden console on Windows (§9.3) | a clone that sits until cancelled | "Waiting…" + Cancel. QA row 6: the default ssh fails fast; only Windows' own OpenSSH (when the user sets it) hangs, and Cancel ends it; no BatchMode (§13 Q5). The follow-up ([ssh-remote-errors.md](ssh-remote-errors.md)) gives ssh Git for Windows' `false.exe` as its askpass, so the hidden-prompt hang (real on a desktop) fails fast instead (verified on a desktop: under about 1.1 s, no console window); it also ends an ssh that printed its error and doesn't exit (seen only with git inside an sshd session) about 10 s later, and keeps ssh's line on a Cancel |
 | Progress format changes across git versions | a stuck or wrong bar (the clone itself still works) | a closed phase set; unknown frames ignored; fixtures captured with 2.51.2; the minimum git is pinned (`src/gitcheck.js:14`) |
 | Removal failing on Windows after a hard kill (locked or read-only files) | a partial folder left | `maxRetries`; the identity check; pending entries retried at the next launch; `leftover` told to the user; the Windows CI test |
 | Very large clones (tens of GB) | long runs; long removals | no timeout; the quit guard asks and kills; removal is async and resumable |
@@ -1528,9 +1533,15 @@ fails fast on a passphrase-protected key (`auth`, about 0.9 s) and on an unknown
 about 0.6 s), with or without BatchMode. Windows' own OpenSSH, which runs only when the user sets
 it as `core.sshCommand` / `GIT_SSH_COMMAND`, prints its error and then never exits while its
 stderr is a pipe, BatchMode or not; Cancel ends it (settled about 120 ms after the abort, nothing
-left running). BatchMode would help neither, so it is not applied.
+left running). BatchMode would help neither, so it is not applied. (Later QA, ssh-remote-errors.md
+§13: that exit hang happens only with git inside an sshd session, as this row ran; on a desktop
+Windows' OpenSSH exits after its error. Its hidden-prompt hang is real, and the follow-up's
+askpass fixes it.)
 
-**Follow-up (a separate PR after #9).**
+**Follow-up (a separate PR after #9).** Planned and built in [ssh-remote-errors.md](ssh-remote-errors.md)
+(the same connection rules on fetch, pull and push, a changed host key told apart, the stall
+watchdog, ssh's line kept on a cancel, the Windows askpass, the messages); its §12 records where
+the build differs.
 - Classify `hostKey` on fetch and push too (`src/remote.js` around line 85, `classifyPush` in
   `src/git-errors.js`), so they say "unknown host key" as clone does.
 - On Windows, end git when its stderr already shows an auth or host-key line and git hasn't exited

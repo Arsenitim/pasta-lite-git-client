@@ -50,7 +50,21 @@ minor versions may contain breaking changes.
   testing on Windows 11 but has had little real use there: expect rough edges, and please report
   what you find. CI now runs the whole test suite on Windows too.
 
+### Changed
+
+- Fetch, Fetch All, Pull and Push explain a failed connection as Clone does: an unknown ssh host
+  key, a host key that **changed** (with the fingerprint the server sent and the `ssh-keygen -R`
+  command, never "accept"), a repository that isn't there, and a server that can't be reached (for
+  Fetch and Pull a notice naming the remote and git's line). An ssh authentication failure names
+  the user and host, the `ssh -T` command to check the key from a terminal, and how to add the key
+  to ssh-agent on your platform; "Too many authentication failures" gets its own advice. The
+  command uses the remote's host as configured (an alias stays an alias), and a host that isn't
+  ASCII is shown in the form ssh saves. Clone's dialog uses the same texts.
+
 ### Fixed
+
+- A cancelled fetch, pull, push or clone says what ssh had reported before the cancel (for example
+  "Permission denied (publickey)"), instead of only "cancelled".
 
 On Windows:
 
@@ -66,6 +80,21 @@ On Windows:
   connecting over ssh may have started a background agent (gpg-agent, an ssh connection master):
   it is stopped with the command and starts again when next needed.
 - Git and its helpers no longer flash a console window.
+- A safeguard for an ssh that prints its error and then never exits: when git's stderr ends with
+  one of ssh's error lines (or the `@@@…` frame of its security warnings) and nothing follows for
+  10 seconds, the fetch, pull, push or clone is ended and says what ssh reported, instead of
+  waiting for the two-minute timeout (a clone, until cancelled). In testing, Windows' own OpenSSH
+  behaved like that only when git ran inside an sshd session; on a desktop it exits after its
+  error, and the safeguard has nothing to do. When it acts, the op ends about 10
+  seconds after ssh's error, with its explanation.
+- Windows' own OpenSSH no longer waits for a key passphrase or a host-key answer on a console
+  nobody can see (an unknown host key left the app at "Working…" with no window to answer in):
+  fetch, pull, push and clone give ssh Git for Windows' `false.exe` as its askpass, so ssh fails
+  with its error and the op ends with the explanation: on a Windows desktop an unknown host key
+  now fails in about 0.7 s and a passphrase-protected key in about 1.1 s, and no console window
+  shows. An askpass you set yourself (`SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`) is left alone; MinGit
+  has no `false.exe`. Not yet checked by hand: Git Credential Manager's sign-in window over HTTPS
+  (docs/plans/ssh-remote-errors.md §13, W12).
 - Git for Windows is found in its usual install folders (machine-wide or per user) when it isn't on
   the PATH.
 - NTFS aliases of `.git` (its 8.3 short name, trailing dots or spaces, alternate data streams) are
