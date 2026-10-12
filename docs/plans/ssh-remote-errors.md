@@ -656,9 +656,11 @@ New file `test/remote-ssh.test.js`:
   true`, git's text as the message; `proxyjump-hang` → `auth` (re-armed by the ending after it);
   `deny-hang` with the timer off and a user's cancel → `aborted` with `said: {kind: 'auth',
   line}`; `silent-hang` with a cancel → `aborted`, no `said`; a cancel landing as the stall fires →
-  `aborted` (the user's wins); `deny-then-serve` with `FAKE_SSH_DELAY` 200 and `stallMs: 2000` →
-  the fetch and the push succeed (no false kill); a `pre-push` hook printing the publickey line,
-  then `sleep 1`, with `stallMs: 3000` → the push succeeds; pull forwards `stallMs` (a `deny-hang`
+  `aborted` (the user's wins); `deny-then-serve` with `FAKE_SSH_DELAY` 200 and the app's own
+  window (`STALL_MS`, 10 s) → the fetch and the push succeed (no false kill); a `pre-push` hook
+  printing the publickey line, then `sleep 1` → the push succeeds. The window holds the whole rest
+  of the op after ssh's line (the transfer prints nothing on stderr): a 2 s one ended a fetch on a
+  slow Windows runner (CI run 38249106151). Pull forwards `stallMs` (a `deny-hang`
   pull stalls); push to two `pushurl`s, the first `deny` → `auth`, the second repository unchanged
   (V11 as a regression test of the git behaviour the watchdog relies on).
 - **S2, clone** (`test/clone.test.js`, with `localFixtures`): `deny-hang` + `stallMs: 500` →
