@@ -342,7 +342,7 @@ test('prChanges/verdict: a PR that changes the app needs an [Unreleased] entry',
   assert.deepEqual(c, { commits: ['feat(ui): a widget'], files: ['renderer/widget.js'], changelog: false });
   let v = verdict(c);
   assert.equal(v.ok, false);
-  assert.match(v.message, /^This pull request changes the app \(1 feat\/fix commit \(feat\(ui\): a widget\) and 1 app file \(renderer\/widget\.js\)\) but not the \[Unreleased\] section of CHANGELOG\.md\. /);
+  assert.match(v.message, /^This pull request changes the app \(1 user-facing commit \(feat\(ui\): a widget\) and 1 app file \(renderer\/widget\.js\)\) but not the \[Unreleased\] section of CHANGELOG\.md\. /);
   assert.match(v.message, /add the skip-changelog label\.$/);
   // An entry under an older release's section doesn't count.
   commit(dir, 'docs: changelog', { 'CHANGELOG.md': changelog('', '- The first release.\n- A widget.') });
@@ -384,6 +384,47 @@ test('prChanges/verdict: app files alone count; docs, tests and CI don\'t; main 
   assert.equal(verdict(prChanges(dir, 'main', 'release')).ok, true);
 });
 
+test('prChanges/verdict: assets, and the parts of package.json that ship, count; its scripts don\'t', () => {
+  const dir = prRepo();
+  const pkg = {
+    name: 'app', version: '1.0.0', main: 'main.js', scripts: { test: 'node --test' },
+    devDependencies: { electron: '44.0.0', eslint: '10.0.0' }, build: { appId: 'x', files: ['main.js'] },
+  };
+  const json = (p) => `${JSON.stringify(p, null, 2)}\n`;
+  commit(dir, 'chore: package.json', { 'package.json': json(pkg) });
+  const pr = (name, message, files) => {
+    git(dir, 'switch', '-q', '-C', name, 'main');
+    commit(dir, message, files);
+    return prChanges(dir, 'main', name);
+  };
+  // A new icon, whatever the commit's type says.
+  let c = pr('icon', 'chore(deps): new icon', { 'assets/icon.png': 'png\n' });
+  assert.deepEqual(c.files, ['assets/icon.png']);
+  assert.equal(verdict(c).ok, false);
+  assert.deepEqual(pr('entitlements', 'chore: entitlements', { 'build/entitlements.mac.plist': 'p\n' }).files, ['build/entitlements.mac.plist']);
+  // Electron's version, the build settings, a runtime dependency, the entry point.
+  c = pr('electron', 'chore(deps): bump electron to 45 and new icon', {
+    'package.json': json({ ...pkg, devDependencies: { ...pkg.devDependencies, electron: '45.0.0' }, build: { ...pkg.build, appId: 'y' } }),
+    'assets/icon.png': 'png\n',
+  });
+  assert.deepEqual(c.files, ['assets/icon.png', 'package.json (electron, build)']);
+  assert.match(verdict(c).message, /\(2 app files \(assets\/icon\.png, package\.json \(electron, build\)\)\)/);
+  assert.deepEqual(pr('dep', 'chore: a dependency', { 'package.json': json({ ...pkg, dependencies: { lib: '1.0.0' } }) }).files,
+    ['package.json (dependencies)']);
+  assert.deepEqual(pr('entry', 'chore: entry point', { 'package.json': json({ ...pkg, main: 'app.js' }) }).files, ['package.json (main)']);
+  // Scripts, other dev tools, the version, and the same settings in another key order don't ship.
+  c = pr('scripts', 'chore: scripts', {
+    'package.json': json({
+      ...pkg, version: '1.0.1', scripts: { ...pkg.scripts, lint: 'eslint .' },
+      devDependencies: { ...pkg.devDependencies, eslint: '10.1.0' }, build: { files: ['main.js'], appId: 'x' },
+    }),
+  });
+  assert.deepEqual(c, { commits: [], files: [], changelog: false });
+  assert.equal(verdict(c).ok, true);
+  // A package.json that isn't JSON (yet) counts as a change to everything.
+  assert.deepEqual(pr('broken', 'chore: broken', { 'package.json': '{\n' }).files, ['package.json (main, electron, build)']);
+});
+
 test('changelog-pr-check.js: exits 1 with an annotation in Actions, 0 when the PR is fine', () => {
   const dir = prRepo();
   git(dir, 'switch', '-q', '-c', 'pr');
@@ -393,7 +434,7 @@ test('changelog-pr-check.js: exits 1 with an annotation in Actions, 0 when the P
   });
   let r = run({ GITHUB_ACTIONS: 'true' }, '--base', 'main', '--head', 'pr');
   assert.equal(r.status, 1);
-  assert.match(r.stdout, /^::error::This pull request changes the app \(1 feat\/fix commit \(fix: a bug\) and 1 app file \(src\/app\.js\)\)/);
+  assert.match(r.stdout, /^::error::This pull request changes the app \(1 user-facing commit \(fix: a bug\) and 1 app file \(src\/app\.js\)\)/);
   r = run({}, '--base', 'main', '--head', 'pr');
   assert.equal(r.status, 1);
   assert.match(r.stderr, /^error: This pull request changes the app/);
