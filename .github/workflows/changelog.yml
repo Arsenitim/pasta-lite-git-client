@@ -1,0 +1,110 @@
+name: changelog
+
+on:
+  # labeled and unlabeled: adding or removing the skip-changelog label runs the check again (only
+  # this workflow, not the test matrix).
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  # Before a release: Actions → changelog → Run workflow drafts the changelog since the last tag.
+  workflow_dispatch:
+    inputs:
+      range:
+        description: 'Range to draft, <from>..<to> or <from> (default: the last v* tag..HEAD)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# A newer run for the same PR cancels the older one. The entry check reads the PR's labels when it
+# runs, so the run that's left gets the label right whichever event started it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A PR that changes the app (a user-facing commit, a change to the app's files, or to what
+  # package.json says about the app that ships: scripts/changelog-pr-check.js) must add to
+  # CHANGELOG.md's [Unreleased] section, so the changelog is written with the change, not at
+  # release time. The check fails rather than
+  # warns: a warning is an annotation nobody opens, and a missing entry is what the check is for.
+  # It isn't a required check, so a maintainer can still merge past it; the skip-changelog label
+  # says on the PR that it needs no entry (a refactor, a change to tests) and turns the check off.
+  entry:
+    name: changelog entry
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Read-only, a fork's PR included: the code, and the PR's labels (pull-requests: read).
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # The PR's labels as they are now, not as the event saw them: a push and the label seconds
+      # apart start two runs, the concurrency group cancels one, and the payload of the run that's
+      # left can predate the label. Whichever run is left asks GitHub, so it gives the right answer.
+      # The PR number goes in through the environment, never into the script's text.
+      - name: Read the skip-changelog label
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          skip="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq 'any(.labels[]; .name == "skip-changelog")')"
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Skipped by label
+        if: steps.label.outputs.skip == 'true'
+        run: echo "The skip-changelog label is set, so no changelog entry is needed."
+
+      # Actions are pinned to a commit (a tag can be moved); the comment names its release.
+      # The whole history: the check reads the PR's commits since its merge base with main. What's
+      # checked out is GitHub's merge of the PR into main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.label.outputs.skip != 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.label.outputs.skip != 'true'
+        with:
+          node-version: 22
+
+      # The base is the merge commit's first parent: main as GitHub merged the PR into it (the
+      # event's base.sha can be older). The head is the PR's own last commit, and the script reads
+      # what the PR changed since its merge base with that main.
+      - name: Check CHANGELOG.md
+        if: steps.label.outputs.skip != 'true'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          base="$(git rev-parse --verify 'HEAD^1')"
+          node scripts/changelog-pr-check.js --base "$base" --head "$HEAD_SHA"
+
+  # The draft from the merged PRs and commits, in the run's summary: a starting point to curate
+  # into [Unreleased] (scripts/changelog-draft.js), never the text to publish. Read-only.
+  draft:
+    name: draft changelog
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The whole history and the tags: the draft starts at the last v* tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # The input goes in through the environment, never into the script's text; the script refuses
+      # a range that starts with "-".
+      - name: Draft
+        env:
+          RANGE: ${{ inputs.range }}
+        run: node scripts/changelog-draft.js --summary ${RANGE:+"$RANGE"} >> "$GITHUB_STEP_SUMMARY"

@@ -13,6 +13,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # On a tag, before anything is built: the tag must match package.json's version and have a dated
+  # "## [X.Y.Z] - YYYY-MM-DD" section in CHANGELOG.md (scripts/release-check.js), and that section
+  # becomes the release's notes (scripts/changelog-section.js), kept as the workflow artifact
+  # "release-notes" for the publish job, which runs nothing from the repo. Only these two scripts
+  # run here: no npm ci, a read-only token, not kept in .git/config.
+  check:
+    name: version and changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # Actions are pinned to a commit (a tag can be moved); the comment names its release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # The build's files are named after package.json's version: on a tag, it must match the tag
+      # (package-lock.json's too), and CHANGELOG.md must have the tag's section for the notes.
+      - name: Check the version and the changelog
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/release-check.js "$GITHUB_REF_NAME"
+
+      # Unwrapped: a release's notes show each newline as a line break. In Actions the script's
+      # error is an annotation on stdout, which is the notes file here: printed again if it fails.
+      - name: Release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          node scripts/changelog-section.js "$GITHUB_REF_NAME" --unwrap > "$notes" || { cat "$notes"; exit 1; }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+
   # Windows: the NSIS installers (x64, arm64) and a portable zip (x64), built with the "win" and
   # "nsis" settings in package.json. They are not code-signed, so a SHA256SUMS file goes with them.
   # The macOS DMGs are signed and notarized on a Mac and uploaded by hand (CONTRIBUTING.md).
@@ -20,6 +62,7 @@ jobs:
   # gets a read-only token and doesn't keep it in .git/config; the publish job below writes.
   build:
     name: windows installers
+    needs: check
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -39,17 +82,7 @@ jobs:
       # Keep the Electron binary download: the build copies its LICENSE files (build.extraResources).
       - run: npm ci
 
-      # The artifacts are named after package.json's version: on a tag, it must match the tag.
-      - name: Check the version
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          version="$(node -p "require('./package.json').version")"
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::package.json version $version doesn't match the tag $GITHUB_REF_NAME"
-            exit 1
-          fi
-
+      # The check job has made sure that, on a tag, package.json's version is the tag's.
       - run: npx electron-builder --win --publish never
 
       # The plain "<hash>  <file>" format (lower-case hex, two spaces, LF): what `sha256sum -c`
@@ -83,13 +116,17 @@ jobs:
           if-no-files-found: error
 
   # On a tag, attach the files to that tag's release, creating it as a draft prerelease if it
-  # doesn't exist yet. A maintainer adds the notes and the DMGs and publishes it. A published
-  # release is never changed: users may already have checked its files against the SHA256SUMS
-  # (but see the race a maintainer's publish can still win, in the step's comment).
+  # doesn't exist yet, with the tag's CHANGELOG.md section as its notes (the check job's
+  # release-notes artifact). The notes end in a marker line: a later run (the tag pushed again
+  # after a fix to CHANGELOG.md) refreshes a draft's notes that have it, or a draft with none;
+  # notes someone wrote are left alone, with a warning if they differ. A maintainer adds the DMGs
+  # and publishes it. A published release is never changed: users may already have checked its
+  # files against the SHA256SUMS (but see the race a maintainer's publish can still win, in the
+  # step's comment).
   # No checkout: gh works on the repository named by GH_REPO, and nothing from the repo runs here.
   publish:
     name: attach to the release
-    needs: build
+    needs: [check, build]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -101,6 +138,11 @@ jobs:
           name: windows
           path: dist
 
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: notes
+
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -109,23 +151,50 @@ jobs:
           tag="$GITHUB_REF_NAME"
           err="$RUNNER_TEMP/release-view.err"
           files=(dist/Pasta-Lite-*-setup.exe dist/Pasta-Lite-*-win-*.zip dist/Pasta-Lite-*-SHA256SUMS-windows.txt)
+          # The changelog's section, then what the release's files need said, then the marker that
+          # says this workflow wrote the notes (an HTML comment: the release page doesn't show it).
+          marker='<!-- notes from CHANGELOG.md -->'
+          plain="$RUNNER_TEMP/release-notes-plain.md"
+          notes="$RUNNER_TEMP/release-notes.md"
+          {
+            cat notes/release-notes.md
+            printf '\n---\n\n%s\n' "The Windows builds are alpha: they work in testing, but expect rough edges, and please report what you find. They aren't code-signed: check them against the SHA256SUMS file. Earlier releases: [CHANGELOG.md](https://github.com/$GH_REPO/blob/$tag/CHANGELOG.md)."
+          } > "$plain"
+          { cat "$plain"; printf '\n%s\n' "$marker"; } > "$notes"
           # Create the draft only on a real "not found": any other failure (network, auth, rate
           # limit) stops here instead of making a second release for the tag.
-          if release="$(gh release view "$tag" --json isDraft,assets 2> "$err")"; then
-            :
+          if release="$(gh release view "$tag" --json isDraft,assets,body 2> "$err")"; then
+            created=false
           elif grep -q 'release not found' "$err"; then
             gh release create "$tag" --draft --prerelease --verify-tag \
-              --title "Pasta Lite Git client ${tag#v}" \
-              --notes "See CHANGELOG.md. The Windows builds are alpha: they work in testing, but expect rough edges, and please report what you find. They aren't code-signed: check them against the SHA256SUMS file."
-            release='{"isDraft":true,"assets":[]}'
+              --title "Pasta Lite Git client ${tag#v}" --notes-file "$notes"
+            created=true
           else
             cat "$err" >&2
             echo "::error::Couldn't look up the release for $tag (see the gh error above)."
             exit 1
           fi
-          if [ "$(jq -r .isDraft <<< "$release")" != true ]; then
-            echo "::error::The release $tag is already published, so its files are left as they are. To replace them, turn it back into a draft first (or upload by hand)."
-            exit 1
+          if [ "$created" = true ]; then
+            assets='[]'
+          else
+            if [ "$(jq -r .isDraft <<< "$release")" != true ]; then
+              echo "::error::The release $tag is already published, so its files are left as they are. To replace them, turn it back into a draft first (or upload by hand)."
+              exit 1
+            fi
+            assets="$(jq -c '[.assets[].name]' <<< "$release")"
+            # The draft's notes: none, or this workflow's (the marker), are replaced with the
+            # changelog's; notes someone wrote are theirs, the same as the changelog's or not.
+            whose="$(jq -r --arg marker "$marker" --rawfile plain "$plain" '
+              def norm: gsub("\r"; "") | sub("\\s+$"; "");
+              (.body // "" | norm) as $body
+              | if $body == "" or ($body | contains($marker)) then "workflow"
+                elif $body == ($plain | norm) then "same"
+                else "someone" end' <<< "$release")"
+            if [ "$whose" = workflow ]; then
+              gh release edit "$tag" --notes-file "$notes"
+            elif [ "$whose" = someone ]; then
+              echo "::warning::The draft release $tag has notes someone wrote (without the workflow's marker line), and they differ from CHANGELOG.md's section: they are left as they are. To get CHANGELOG.md's notes instead, empty the draft's notes and re-run this workflow."
+            fi
           fi
           # A file the draft doesn't have yet is uploaded without --clobber, so it can't replace
           # anything; only a re-run of the workflow replaces (--clobber) the files it attached
@@ -135,7 +204,7 @@ jobs:
           # failure; turning on immutable releases (Settings → General → Releases) closes it.
           new=() existing=()
           for f in "${files[@]}"; do
-            if jq -e --arg n "${f##*/}" 'any(.assets[]; .name == $n)' <<< "$release" > /dev/null; then
+            if jq -e --arg n "${f##*/}" 'any(.[]; . == $n)' <<< "$assets" > /dev/null; then
               existing+=("$f")
             else
               new+=("$f")
