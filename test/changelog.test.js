@@ -6,8 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { git, initRepo, tmpDir, write } = require('./helpers');
-const { parseChangelog, findSection, sectionName, unwrap, parseSubject, sectionOf, isEntry } = require('../scripts/changelog');
+const { git, initRepo, tmpDir, write, commitFile } = require('./helpers');
+const { parseChangelog, findSection, sectionName, unwrap, parseSubject, sectionOf, isEntry, report } = require('../scripts/changelog');
 const { draft, render } = require('../scripts/changelog-draft');
 const { prChanges, verdict } = require('../scripts/changelog-pr-check');
 const { releaseProblems } = require('../scripts/release-check');
@@ -144,6 +144,25 @@ test('parseSubject, sectionOf and isEntry: conventional types to Keep a Changelo
   assert.deepEqual(['Added', 'Security', 'skip', 'unknown'].map(isEntry), [true, true, false, false]);
 });
 
+test('report: an annotation in Actions, its %, CR and LF escaped; plain text otherwise', (t) => {
+  const log = t.mock.method(console, 'log', () => {});
+  const error = t.mock.method(console, 'error', () => {});
+  const saved = process.env.GITHUB_ACTIONS;
+  t.after(() => {
+    if (saved === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = saved;
+  });
+  process.env.GITHUB_ACTIONS = 'true';
+  report('error', '100% wrong\r\nsecond line');
+  report('warning', 'a %0A that stays text');
+  assert.deepEqual(log.mock.calls.map((c) => c.arguments), [['::error::100%25 wrong%0D%0Asecond line'], ['::warning::a %250A that stays text']]);
+  process.env.GITHUB_ACTIONS = '';
+  report('error', '100% wrong\nsecond line');
+  report('warning', 'w');
+  assert.deepEqual(error.mock.calls.map((c) => c.arguments), [['error: 100% wrong\nsecond line']]);
+  assert.deepEqual(log.mock.calls.slice(2).map((c) => c.arguments), [['warning: w']]);
+});
+
 test('releaseProblems: the tag, package.json, package-lock.json and the dated section agree', () => {
   const ok = { tag: 'v1.0.0', pkg: { version: '1.0.0' }, lock: { version: '1.0.0', packages: { '': { version: '1.0.0' } } }, changelog: changelog() };
   assert.deepEqual(releaseProblems(ok), { errors: [], warnings: [] });
@@ -217,12 +236,18 @@ test('changelog-section.js: prints a section, unwrapped on request; a missing or
 });
 
 let fileCount = 0;
-/** Commit `files` ({name: content}; default a new file) in `dir` with `message`; its short sha. */
+/**
+ * Commit `files` ({name: content}; default a new file) in `dir` with `message`, the last through
+ * helpers.commitFile with the others staged; its short sha.
+ */
 function commit(dir, message, files = { [`f${++fileCount}.txt`]: 'x\n' }) {
-  for (const [name, content] of Object.entries(files)) write(dir, name, content);
-  git(dir, 'add', '-A');
-  git(dir, 'commit', '-q', '-m', message);
-  return git(dir, 'rev-parse', 'HEAD').trim().slice(0, 7);
+  const entries = Object.entries(files);
+  for (const [name, content] of entries.slice(0, -1)) {
+    write(dir, name, content);
+    git(dir, 'add', '--', name);
+  }
+  const [name, content] = entries[entries.length - 1];
+  return commitFile(dir, name, content, message).slice(0, 7);
 }
 
 /** Merge `branch` into the checked-out branch as GitHub merges PR `number` titled `title`. */
@@ -321,6 +346,23 @@ test('draft: the default range starts at the last v* tag before HEAD, or covers 
   assert.throws(() => draft(dir, '--output=x'), /Not a revision/);
   assert.throws(() => draft(dir, 'v1.0.0...HEAD'), /Not a range: "v1\.0\.0\.\.\.HEAD"/);
   assert.throws(() => draft(dir, 'nope..HEAD'), /Not a commit: nope/);
+});
+
+test('draft: a BREAKING CHANGE footer makes a commit, and the PR it is in, breaking', () => {
+  const dir = initRepo();
+  git(dir, 'tag', 'v1.0.0');
+  git(dir, 'commit', '-q', '--allow-empty', '-m', 'feat: a new config format', '-m', 'BREAKING CHANGE: the old file is no longer read.');
+  git(dir, 'switch', '-q', '-c', 'feat/flags');
+  git(dir, 'commit', '-q', '--allow-empty', '-m', 'fix: flag parsing', '-m', 'Why.\n\nBREAKING-CHANGE: --old is gone.');
+  git(dir, 'switch', '-q', 'main');
+  mergePr(dir, 7, 'feat/flags', 'feat: new flags');
+  // A body that only mentions it isn't a footer.
+  git(dir, 'commit', '-q', '--allow-empty', '-m', 'fix: a typo', '-m', 'Not a BREAKING CHANGE: just a typo.');
+  assert.deepEqual(draft(dir).entries.map((e) => [e.text, e.ref.startsWith('#') ? e.ref : 'sha']), [
+    ['**Breaking:** A new config format', 'sha'],
+    ['**Breaking:** New flags', '#7'],
+    ['A typo', 'sha'],
+  ]);
 });
 
 test('changelog-draft.js: prints the draft; a bad range exits 1', () => {
