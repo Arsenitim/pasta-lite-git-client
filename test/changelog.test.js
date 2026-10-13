@@ -148,7 +148,7 @@ test('releaseProblems: the tag, package.json, package-lock.json and the dated se
   const ok = { tag: 'v1.0.0', pkg: { version: '1.0.0' }, lock: { version: '1.0.0', packages: { '': { version: '1.0.0' } } }, changelog: changelog() };
   assert.deepEqual(releaseProblems(ok), { errors: [], warnings: [] });
   assert.deepEqual(releaseProblems({ ...ok, tag: 'v1.0' }).errors, ["The tag v1.0 isn't a version tag (v<major>.<minor>.<patch>)."]);
-  assert.deepEqual(releaseProblems({ ...ok, tag: 'release-1.0.0' }).errors.length, 1);
+  assert.equal(releaseProblems({ ...ok, tag: 'release-1.0.0' }).errors.length, 1);
   assert.deepEqual(releaseProblems({ ...ok, pkg: { version: '0.9.0' } }).errors, ["package.json version 0.9.0 doesn't match the tag v1.0.0."]);
   assert.match(releaseProblems({ ...ok, lock: { version: '1.0.0', packages: { '': { version: '0.9.0' } } } }).errors[0],
     /^package-lock\.json version 0\.9\.0 doesn't match the tag v1\.0\.0/);
@@ -170,6 +170,21 @@ test('releaseProblems: a missing, undated or empty section fails; a missing link
   assert.deepEqual(releaseProblems({ ...base, changelog: '## [Unreleased]\n\n## [1.1.0] - 2026-10-13\n\n- New.\n' }), {
     errors: [], warnings: ['CHANGELOG.md has no link reference for [1.1.0] at its end.'],
   });
+});
+
+test('releaseProblems: a date that isn\'t a day, and a section that appears twice, fail', () => {
+  const base = { pkg: { version: '1.1.0' }, lock: { version: '1.1.0', packages: { '': { version: '1.1.0' } } }, tag: 'v1.1.0' };
+  const dated = (date) => releaseProblems({ ...base, changelog: `## [1.1.0] - ${date}\n\n- New.\n\n[1.1.0]: https://x\n` }).errors;
+  for (const date of ['2026-13-01', '2026-12-99', '2026-02-30', '2025-02-29', '0000-00-00']) {
+    assert.deepEqual(dated(date), [`CHANGELOG.md's [1.1.0] heading has ${date}, which isn't a date.`], date);
+  }
+  assert.deepEqual(dated('2028-02-29'), []);
+  assert.deepEqual(dated('2026-12-31'), []);
+  const twice = '## [1.1.0] - 2026-10-13\n\n- New.\n\n## [1.0.0] - 2026-09-01\n\n- Old.\n\n## [1.1.0] - 2026-10-01\n\n- Again.\n\n[1.1.0]: https://x\n';
+  assert.deepEqual(releaseProblems({ ...base, changelog: twice }).errors, ['CHANGELOG.md has more than one "## [1.1.0]" section.']);
+  // Another version twice is an error in the file too.
+  assert.deepEqual(releaseProblems({ ...base, changelog: twice.replace(/1\.1\.0\] - 2026-10-01/, '1.0.0] - 2026-09-01') }).errors,
+    ['CHANGELOG.md has more than one "## [1.0.0]" section.']);
 });
 
 test('changelog-section.js: prints a section, unwrapped on request; a missing or empty one exits 1', () => {
@@ -455,17 +470,44 @@ test('changelog-pr-check.js: exits 1 with an annotation in Actions, 0 when the P
   assert.match(r.stderr, /^error: .*no-such-branch/);
 });
 
-test('release-check.js: package.json\'s version has a dated CHANGELOG.md section, and a wrong tag fails', () => {
-  // The repository's own files: package.json's version is the last release (or the one being
-  // released), so CHANGELOG.md has its section. With no tag the script checks v<that version>.
-  const run = (...args) => spawnSync(process.execPath, [path.join(SCRIPTS, 'release-check.js'), ...args], {
-    encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: '' },
+/** A folder with a copy of release-check.js (and changelog.js) under scripts/, and `files`. */
+function releaseDir(files) {
+  const dir = tmpDir();
+  for (const f of ['release-check.js', 'changelog.js']) write(dir, `scripts/${f}`, fs.readFileSync(path.join(SCRIPTS, f), 'utf8'));
+  for (const [name, content] of Object.entries(files)) write(dir, name, content);
+  return dir;
+}
+
+test('release-check.js: checks v<package.json version> or a tag; annotations in Actions; unreadable files', () => {
+  const lock = (v) => JSON.stringify({ version: v, packages: { '': { version: v } } });
+  const dir = releaseDir({ 'package.json': JSON.stringify({ version: '1.0.0' }), 'package-lock.json': lock('1.0.0'), 'CHANGELOG.md': changelog() });
+  const run = (env, ...args) => spawnSync(process.execPath, [path.join(dir, 'scripts', 'release-check.js'), ...args], {
+    encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: '', ...env },
   });
-  const r = run();
+  let r = run({});
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /: package\.json, package-lock\.json and CHANGELOG\.md agree\.\n$/);
-  const bad = run('v0.0.0-not.a.release');
-  assert.equal(bad.status, 1);
-  assert.match(bad.stderr, /^error: package\.json version .* doesn't match the tag v0\.0\.0-not\.a\.release\.$/m);
-  assert.match(bad.stderr, /^error: CHANGELOG\.md has no "## \[0\.0\.0-not\.a\.release\] - YYYY-MM-DD" section/m);
+  assert.equal(r.stdout, 'v1.0.0: package.json, package-lock.json and CHANGELOG.md agree.\n');
+  r = run({ GITHUB_ACTIONS: 'true' }, 'v1.1.0');
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, [
+    "::error::package.json version 1.0.0 doesn't match the tag v1.1.0.",
+    "::error::package-lock.json version 1.0.0 doesn't match the tag v1.1.0 (run npm install after changing package.json).",
+    '::error::CHANGELOG.md has no "## [1.1.0] - YYYY-MM-DD" section: move the [Unreleased] entries under one.',
+    '',
+  ].join('\n'));
+  r = run({}, 'v1.1.0');
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^error: package\.json version 1\.0\.0 doesn't match the tag v1\.1\.0\.$/m);
+  r = run({}, 'v1.0.0', 'v1.1.0');
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^error: Unexpected argument: v1\.1\.0\nUsage: /);
+  // A missing or broken file is an error that names it, not a stack trace.
+  write(dir, 'package-lock.json', '{ "version": ');
+  r = run({});
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^error: package-lock\.json isn't valid JSON: /);
+  fs.rmSync(path.join(dir, 'package-lock.json'));
+  r = run({});
+  assert.equal(r.status, 1);
+  assert.equal(r.stderr, "error: Can't read package-lock.json: there is no such file.\n");
 });

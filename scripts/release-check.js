@@ -3,14 +3,21 @@
 //   node scripts/release-check.js [<tag>]     (default: v<package.json version>)
 // The release workflow (.github/workflows/release.yml) runs it first on a pushed v* tag, so a tag
 // whose version isn't in package.json, package-lock.json or a dated "## [X.Y.Z] - YYYY-MM-DD"
-// section of CHANGELOG.md fails before anything is built. Run it before tagging too. Errors exit 1;
-// warnings (no link reference for the version, entries left under [Unreleased]) don't.
+// section of CHANGELOG.md (a real date, the version's only section) fails before anything is
+// built. Run it before tagging too. Errors exit 1; warnings (no link reference for the version,
+// entries left under [Unreleased]) don't.
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs } = require('node:util');
 const { parseChangelog, report } = require('./changelog');
 
 const TAG = /^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/;
+
+/** Whether YYYY-MM-DD `date` is a day of the calendar (not 2026-13-99 or 2026-02-30). */
+function calendarDate(date) {
+  const d = new Date(`${date}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date;
+}
 
 /**
  * {errors, warnings} for releasing `tag` from these files' contents: `pkg` and `lock` parsed
@@ -28,11 +35,17 @@ function releaseProblems({ tag, pkg, lock, changelog }) {
     errors.push(`package-lock.json version ${locked.find((v) => v !== version)} doesn't match the tag ${tag} (run npm install after changing package.json).`);
   }
   const { sections, links } = parseChangelog(changelog);
+  const seen = new Set();
+  for (const { name } of sections) {
+    if (seen.has(name.toLowerCase())) errors.push(`CHANGELOG.md has more than one "## [${name}]" section.`);
+    seen.add(name.toLowerCase());
+  }
   const section = sections.find((s) => s.name === version);
   if (!section) {
     errors.push(`CHANGELOG.md has no "## [${version}] - YYYY-MM-DD" section: move the [Unreleased] entries under one.`);
   } else {
     if (!section.date) errors.push(`CHANGELOG.md's [${version}] heading has no release date ("## [${version}] - YYYY-MM-DD").`);
+    else if (!calendarDate(section.date)) errors.push(`CHANGELOG.md's [${version}] heading has ${section.date}, which isn't a date.`);
     if (!section.body) errors.push(`CHANGELOG.md's [${version}] section is empty.`);
     if (!links.has(version.toLowerCase())) warnings.push(`CHANGELOG.md has no link reference for [${version}] at its end.`);
   }
