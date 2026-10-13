@@ -102,17 +102,20 @@ function draft(cwd, rangeArg) {
     else entries.push({ section: changed(item.section), text: entryText(item.parsed), ref: short(c.sha), details: [] });
   };
   for (const c of log(cwd, ['--first-parent', '--reverse', '--end-of-options', ...revs])) {
-    const merge = MERGE_PR.exec(c.subject);
-    const squash = !merge && c.parents.length === 1 && SQUASH_PR.exec(c.subject);
-    if (merge && c.parents.length > 1) {
-      const commits = log(cwd, ['--no-merges', '--reverse', '--end-of-options', `${c.parents[0]}..${c.parents[1]}`]).map(commitItem);
-      const title = c.body.split('\n')[0].trim() || c.subject;
-      addPr({ number: merge[1], branch: merge[2].replace(/^[^/]+\//, ''), title, commits });
+    const squash = c.parents.length === 1 && SQUASH_PR.exec(c.subject);
+    if (c.parents.length > 1) {
+      const merged = log(cwd, ['--no-merges', '--reverse', '--end-of-options', `${c.parents[0]}..${c.parents[1]}`]);
+      const pr = MERGE_PR.exec(c.subject);
+      // A PR's merge commit has its title as the body. Another merge into main (a branch, not a
+      // PR): its commits count one by one.
+      if (pr) {
+        const title = c.body.split('\n')[0].trim() || c.subject;
+        addPr({ number: pr[1], branch: pr[2].replace(/^[^/]+\//, ''), title, commits: merged.map(commitItem) });
+      } else {
+        merged.forEach(addCommit);
+      }
     } else if (squash) {
       addPr({ number: squash[2], branch: '', title: squash[1], commits: [commitItem({ ...c, subject: squash[1] })] });
-    } else if (c.parents.length > 1) {
-      // Another merge into main (a branch, not a PR): its commits count one by one.
-      for (const m of log(cwd, ['--no-merges', '--reverse', '--end-of-options', `${c.parents[0]}..${c.parents[1]}`])) addCommit(m);
     } else {
       addCommit(c);
     }
