@@ -245,7 +245,10 @@ were merged ([Changelog](#changelog)): nothing is written from scratch at releas
    `sha256sum -c` reads them), since they aren't signed. It keeps these files as a workflow
    artifact named `windows`. Its `publish` job then attaches them to the GitHub release for the
    tag, which it creates as a draft prerelease with those notes (and a note on the Windows builds)
-   if there's none yet; a draft you made with no notes gets them too. It only ever changes a draft:
+   if there's none yet. The notes end in a hidden `<!-- notes from CHANGELOG.md -->` line: a later
+   run (after a fix to `CHANGELOG.md`, with the tag moved and pushed again) replaces the notes of a
+   draft that has that line, or no notes at all. Notes without the line are yours: the job leaves
+   them alone, and warns if they differ from the changelog's. It only ever changes a draft:
    if the release is already published, the job fails and leaves the release's files alone, and
    if the draft gets published while the job is attaching its files, the job fails loudly too.
    Only a re-run replaces files (of the draft) it attached before.
@@ -262,7 +265,8 @@ were merged ([Changelog](#changelog)): nothing is written from scratch at releas
    (`gh release create v<version> --draft --prerelease`): the workflow then attaches its files to
    that one. Don't publish the release before the workflow has attached the Windows files.
 5. Read the notes over and publish the release. It should carry two DMGs, two `-setup.exe`
-   installers, the zip and the SHA256SUMS file. A fix to the notes belongs in `CHANGELOG.md` too.
+   installers, the zip and the SHA256SUMS file. A fix to the notes belongs in `CHANGELOG.md` too;
+   if you edit the draft's notes by hand instead, delete the marker line so a re-run keeps them.
 
 ## Architecture
 
