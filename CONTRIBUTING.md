@@ -373,7 +373,12 @@ test(main): guard the helpers both sandboxed preloads duplicate
 chore: relicense under Apache 2.0
 ```
 
-- Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore` and `ci`.
+- Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore` and `ci`, and less often `perf`,
+  `revert`, `security`, `build` and `style`. `feat`, `fix`, `perf`, `revert` and `security` are
+  user-facing: the changelog draft puts them under Added, Fixed, Changed, Changed and Security,
+  and the changelog check expects an entry for them ([Changelog](#changelog)). A `security`
+  scope, or the word "security", "vulnerability" or a CVE id in the subject, makes any of them a
+  Security entry. The other types are never user-facing by themselves.
 - Common scopes: `src`, `main`, `renderer`, `ops`, `rebase`, `bare`, `tabs`, `graph` and `plan`.
 - Write the subject in lower case, in the imperative or as a noun phrase, with no trailing period.
   Use the body to explain why.
@@ -386,9 +391,11 @@ user-facing change adds its entry under `## [Unreleased]`, in the section that f
 `Changed`, `Fixed`, `Security`; Windows-only fixes under "On Windows:"), so the changelog is ready
 when the release is cut.
 
-The changelog workflow (`.github/workflows/changelog.yml`) checks that: a PR with `feat` or `fix`
-commits, or changes to `main.js`, the preloads, `main/`, `renderer/` or `src/`, fails its
-"changelog entry" check until it changes `[Unreleased]`. Run it locally with
+The changelog workflow (`.github/workflows/changelog.yml`) checks that: a PR with user-facing
+commits ([Commits](#commits)), changes to `main.js`, the preloads, `main/`, `renderer/`, `src/`,
+`assets/` or `build/`, or changes to what `package.json` says about the app that ships (its
+Electron version, runtime `dependencies`, `main` or `build` settings, but not its scripts or other
+dev tools) fails its "changelog entry" check until it changes `[Unreleased]`. Run it locally with
 `npm run changelog:check` (against `origin/main`). A maintainer adds the `skip-changelog` label to
 a PR that needs no entry, such as a refactor or a fix to tests.
 
