@@ -12,9 +12,27 @@ const { execFileSync } = require('node:child_process');
 // "## [0.2.1] - 2026-10-04", "## [Unreleased]". The date is optional here (release-check.js
 // requires it for a release).
 const VERSION_HEADING = /^##\s+\[([^\]]+)\](.*)$/;
-const FENCE = /^\s*(```|~~~)/;
+// A fenced code block's opening line: three or more backticks or tildes, then an info string (one
+// without backticks after backticks). CommonMark allows 0-3 spaces before it; any indentation is
+// allowed here, as a fence inside a list item is indented by the item's.
+const FENCE_OPEN = /^\s*(`{3,}(?=[^`]*$)|~{3,})/;
+const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/;
 // A link reference definition, like the "[0.2.1]: https://..." lines at the end of the file.
 const LINK_REF = /^\[([^\]]+)\]:\s*(\S+)/;
+
+/**
+ * The fenced code block open after `line`, given `fence`, the one open before it (null outside
+ * code). As in CommonMark, only a line of the opening's character, at least as many of them and
+ * nothing else closes it: a ~~~ line inside a ``` block, or a ``` line inside a ```` block, is code.
+ */
+function nextFence(fence, line) {
+  if (!fence) {
+    const open = FENCE_OPEN.exec(line);
+    return open ? open[1] : null;
+  }
+  const close = FENCE_CLOSE.exec(line);
+  return close && close[1][0] === fence[0] && close[1].length >= fence.length ? null : fence;
+}
 
 /**
  * The version sections of a Keep a Changelog file, in file order: [{name, date, body}], `body`
@@ -27,7 +45,7 @@ function parseChangelog(text) {
   const sections = [];
   const links = new Map();
   let current = null;
-  let fence = false;
+  let fence = null;
   const close = () => {
     if (!current) return;
     const body = current.lines;
@@ -37,15 +55,17 @@ function parseChangelog(text) {
     current = null;
   };
   for (const line of lines) {
-    if (FENCE.test(line)) fence = !fence;
-    const link = !fence && LINK_REF.exec(line);
+    // The fence lines themselves are code too.
+    const code = fence !== null || FENCE_OPEN.test(line);
+    fence = nextFence(fence, line);
+    const link = !code && LINK_REF.exec(line);
     if (link) links.set(link[1].toLowerCase(), link[2]);
-    const heading = !fence && VERSION_HEADING.exec(line);
+    const heading = !code && VERSION_HEADING.exec(line);
     if (heading) {
       close();
       const date = /^\s*-\s*(\d{4}-\d{2}-\d{2})\b/.exec(heading[2]);
       current = { name: heading[1].trim(), date: date ? date[1] : null, lines: [] };
-    } else if (!fence && /^#{1,2}\s/.test(line)) {
+    } else if (!code && /^#{1,2}\s/.test(line)) {
       close(); // another level-1 or level-2 heading ends the version's section
     } else if (current) {
       current.lines.push(line);
@@ -67,37 +87,79 @@ function findSection(text, version) {
   return parseChangelog(text).sections.find((s) => s.name.toLowerCase() === name) || null;
 }
 
+// The blocks unwrap tells from a paragraph's text (CommonMark's, and GitHub's tables). A line
+// that starts one of them is never joined to the line before it.
+const HEADING = /^\s*#{1,6}(\s|$)/; // "#12" at the start of a wrapped line is text
+const BULLET = /^\s*[-*+]\s/;
+const ORDERED = /^\s*(\d{1,9})[.)]\s/;
+const QUOTE = /^\s*>/;
+// A thematic break (***, - - -) or a setext heading's underline (===, ---).
+const RULE = /^ {0,3}(([-*_])(\s*\2){2,}|=+|-+)\s*$/;
+// A table's delimiter row, "| --- | :-: |" or "--- | ---" (it must have a pipe): the line above
+// it is the table's header.
+const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const BLANK = /^\s*$/;
+const BLOCK_TAGS = 'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|'
+  + 'fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|'
+  + 'nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
+// The HTML blocks that can interrupt a paragraph (CommonMark's kinds 1 to 6), each with the line
+// that ends it: its closing marker, or for a block-level tag a blank line. An inline tag such as
+// <kbd> at the start of a wrapped line is text.
+const HTML_BLOCKS = [
+  [/^\s*<(pre|script|style|textarea)(\s|>|$)/i, /<\/(pre|script|style|textarea)>/i],
+  [/^\s*<!--/, /-->/],
+  [/^\s*<\?/, /\?>/],
+  [/^\s*<!\[CDATA\[/, /\]\]>/],
+  [/^\s*<![A-Za-z]/, />/],
+  [new RegExp(`^\\s*</?(${BLOCK_TAGS})(\\s|/?>|$)`, 'i'), BLANK],
+];
+// A hard line break: two or more spaces, or an unescaped backslash, at the end of the line.
+const HARD_BREAK = /( {2,}|(^|[^\\])(\\\\)*\\)$/;
+
 /**
  * `markdown` with each paragraph and list item on one line. CHANGELOG.md is wrapped at 100
- * columns, and a GitHub release's notes show every newline as a line break. Fenced code, headings,
- * tables and a line ending in two spaces (a Markdown line break) keep their newlines.
+ * columns, and a GitHub release's notes show every newline as a line break. Everything else keeps
+ * its newlines: fenced code, headings, setext underlines and thematic breaks, quotes, tables
+ * (verbatim up to a blank line), HTML blocks, link reference definitions, and a hard line break.
+ *
+ * A numbered line in the middle of a paragraph: as in CommonMark, only "1." (or "1)") starts a list
+ * there, so "released in\n2026. Then" stays one paragraph; but after a list item, "2." is that
+ * list's next item. (CommonMark would make an indented "2." inside a bullet's wrapped text part of
+ * the text; the changelog doesn't wrap that way.)
  */
 function unwrap(markdown) {
+  const lines = markdown.split('\n');
   const out = [];
-  let fence = false;
-  let joinable = false;
-  for (const line of markdown.split('\n')) {
-    if (FENCE.test(line)) {
-      fence = !fence;
+  let fence = null;
+  let verbatim = null; // the end of the HTML block or table being copied, see HTML_BLOCKS
+  let joinable = false; // whether the next line may continue out's last line
+  lines.forEach((line, i) => {
+    if (verbatim || fence !== null || FENCE_OPEN.test(line)) {
+      if (verbatim) {
+        if (verbatim.test(line)) verbatim = null;
+      } else {
+        fence = nextFence(fence, line);
+      }
       out.push(line);
       joinable = false;
-      continue;
+      return;
     }
-    if (fence) {
-      out.push(line);
-      continue;
-    }
-    const blank = !line.trim();
-    // A line that starts a block of its own: a list item, a heading, a quote, a table row, HTML.
-    const starts = /^\s*([-*+]\s|\d+[.)]\s|#|>|\||<)/.test(line);
-    if (joinable && !blank && !starts) {
-      out[out.length - 1] += ` ${line.trim()}`;
-    } else {
-      out.push(line);
-    }
-    const last = out[out.length - 1];
-    joinable = !blank && !/^\s*(#|\|)/.test(last) && !/ {2}$/.test(last);
-  }
+    const html = HTML_BLOCKS.find(([open]) => open.test(line));
+    const next = lines[i + 1] || '';
+    const table = line.includes('|') && next.includes('|') && TABLE_DELIMITER.test(next);
+    const prev = out.length ? out[out.length - 1] : '';
+    const rule = RULE.test(line); // "* * *" isn't a list item
+    const item = !rule && (BULLET.test(line)
+      || (ORDERED.test(line) && (Number(ORDERED.exec(line)[1]) === 1 || BULLET.test(prev) || ORDERED.test(prev))));
+    const starts = item || rule || BLANK.test(line) || html || table || HEADING.test(line) || QUOTE.test(line)
+      || LINK_REF.test(line);
+    if (joinable && !starts) out[out.length - 1] += ` ${line.trimStart()}`;
+    else out.push(line);
+    if (html) verbatim = html[1].test(line) ? null : html[1]; // <!-- a one-line comment -->
+    if (table) verbatim = BLANK;
+    // A paragraph, a list item or a quote goes on, unless this line ends in a hard line break.
+    joinable = !verbatim && (!starts || item || QUOTE.test(line)) && !HARD_BREAK.test(out[out.length - 1]);
+  });
   return out.join('\n');
 }
 

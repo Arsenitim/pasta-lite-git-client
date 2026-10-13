@@ -76,6 +76,52 @@ test('unwrap: paragraphs and list items on one line; fences, headings, nested it
   assert.equal(unwrap('Some text\n1. first\n2. second\n> quote\n| a | b |\n| - | - |'), 'Some text\n1. first\n2. second\n> quote\n| a | b |\n| - | - |');
 });
 
+test('unwrap: what starts a block, and what a wrapped line is joined to', () => {
+  const same = (md) => assert.equal(unwrap(md), md, md);
+  // "#12" and an inline tag are text; "# x" is a heading and a block-level tag an HTML block.
+  assert.equal(unwrap('Fixes the crash from\n#12 and\n<kbd>Ctrl</kbd> keys.'), 'Fixes the crash from #12 and <kbd>Ctrl</kbd> keys.');
+  same('Text\n# Heading\nText');
+  // An HTML block is copied as it is up to a blank line; a one-line comment ends where it starts.
+  assert.equal(unwrap('<details>\n<summary>More</summary>\nhidden\ntext\n</details>\n\nAfter\nmore'),
+    '<details>\n<summary>More</summary>\nhidden\ntext\n</details>\n\nAfter more');
+  assert.equal(unwrap('<!-- a note -->\nText\nmore'), '<!-- a note -->\nText more');
+  // Only "1." starts a list in the middle of a paragraph; in a list, "2." is the next item.
+  assert.equal(unwrap('Released in\n2026. Then\nmore.'), 'Released in 2026. Then more.');
+  same('Steps:\n1. one\n2. two\n3) three');
+  same('- a bullet\n2. then a numbered list');
+  assert.equal(unwrap('1. one that\nwraps\n2. two'), '1. one that wraps\n2. two');
+  // Hard line breaks: two spaces or a backslash, also at the end of a joined line; an escaped
+  // backslash isn't one.
+  same('a\\\nb');
+  assert.equal(unwrap('a\\\\\nb'), 'a\\\\ b');
+  assert.equal(unwrap('a\nb  \nc'), 'a b  \nc');
+  // Setext underlines and thematic breaks end the paragraph above and are joined to nothing.
+  assert.equal(unwrap('Title\nwrapped\n=====\nText\nmore'), 'Title wrapped\n=====\nText more');
+  same('Sub\n---\nx');
+  same('a\n* * *\nb');
+  // A table, with or without outer pipes, is copied as it is up to a blank line.
+  assert.equal(unwrap('Intro\na | b\n--- | :-:\n1 | 2\nrow\n\nAfter\nmore'), 'Intro\na | b\n--- | :-:\n1 | 2\nrow\n\nAfter more');
+  assert.equal(unwrap('Pipes | in text\nare text'), 'Pipes | in text are text');
+  // Link reference definitions keep a line each.
+  same('[a]: https://example.com/a\n[b]: https://example.com/b');
+});
+
+test('unwrap and parseChangelog: a fence ends at a line of its own character, at least as long', () => {
+  // A ~~~ line in a ``` block, and a ``` line in a ```` block, are code.
+  assert.equal(unwrap('```\n~~~\nkeep\nthis\n```\nwrapped\ntext'), '```\n~~~\nkeep\nthis\n```\nwrapped text');
+  assert.equal(unwrap('````md\n```\nkeep\nthis\n```\n````\nwrapped\ntext'), '````md\n```\nkeep\nthis\n```\n````\nwrapped text');
+  // A closing line has no info string; an opening backtick line has no backtick after the fence.
+  assert.equal(unwrap('```\n```js\nkeep\n```\nwrapped\ntext'), '```\n```js\nkeep\n```\nwrapped text');
+  assert.equal(unwrap('```inline``` code\nwraps'), '```inline``` code wraps');
+  const text = [
+    '## [1.0.0] - 2026-09-01', '', '````md', '```', '## [9.9.9] - inside', '```', '````', '',
+    '~~~', '```', '## [8.8.8] - inside', '~~~', '', '## [0.9.0] - 2026-08-01', '', '- x',
+  ].join('\n');
+  assert.deepEqual(parseChangelog(text).sections.map((s) => s.name), ['1.0.0', '0.9.0']);
+  // An unclosed fence runs to the end.
+  assert.deepEqual(parseChangelog('## [1.0.0]\n\n```\n## [0.9.0]\n').sections.map((s) => s.name), ['1.0.0']);
+});
+
 test('parseSubject, sectionOf and isEntry: conventional types to Keep a Changelog sections', () => {
   assert.deepEqual(parseSubject('feat(renderer)!: drop the old view'), { type: 'feat', scope: 'renderer', breaking: true, description: 'drop the old view' });
   assert.deepEqual(parseSubject('Windows alpha builds'), { type: null, scope: null, breaking: false, description: 'Windows alpha builds' });
