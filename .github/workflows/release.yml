@@ -40,10 +40,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: node scripts/release-check.js "$GITHUB_REF_NAME"
 
-      # Unwrapped: a release's notes show each newline as a line break.
+      # Unwrapped: a release's notes show each newline as a line break. In Actions the script's
+      # error is an annotation on stdout, which is the notes file here: printed again if it fails.
       - name: Release notes from CHANGELOG.md
         if: startsWith(github.ref, 'refs/tags/v')
-        run: node scripts/changelog-section.js "$GITHUB_REF_NAME" --unwrap > "$RUNNER_TEMP/release-notes.md"
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          node scripts/changelog-section.js "$GITHUB_REF_NAME" --unwrap > "$notes" || { cat "$notes"; exit 1; }
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: startsWith(github.ref, 'refs/tags/v')

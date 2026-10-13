@@ -15,7 +15,8 @@
 // commits are listed under it. Types that aren't user-facing (test, docs, chore, ci, build,
 // style, refactor) are left out and only counted at the end. --summary writes the counts as text
 // instead of HTML comments, for a GitHub job summary (.github/workflows/changelog.yml).
-const { git, checkRev, parseSubject, sectionOf, isEntry } = require('./changelog');
+const { parseArgs } = require('node:util');
+const { git, checkRev, parseSubject, sectionOf, isEntry, errorText } = require('./changelog');
 
 // Keep a Changelog's order.
 const SECTIONS = ['Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'];
@@ -60,25 +61,28 @@ function lastTag(cwd, to) {
 
 /** {from, to, revs}: the git log arguments for a range argument (see the header), or the default. */
 function resolveRange(cwd, arg) {
-  const [a, b] = arg && arg.includes('..') ? arg.split('..') : [arg, ''];
+  // A ref name can't hold "..": a symmetric "a...b" or "a..b..c" is a mistake, not a range.
+  const [a, b = '', ...rest] = arg ? arg.split('..') : [];
+  if (rest.length || (arg && arg.includes('...'))) throw new Error(`Not a range: ${JSON.stringify(arg)} (<from>..<to> or <from>)`);
   const to = b ? checkRev(b, 'the range end') : 'HEAD';
   const from = arg ? checkRev(a, 'the range start') : lastTag(cwd, to);
   for (const rev of [from, to]) if (rev && !commitOf(cwd, rev)) throw new Error(`Not a commit: ${rev}`);
   return { from, to, revs: from ? [`${from}..${to}`] : [to] };
 }
 
-/** "description (#N)" with a capital first letter, as CHANGELOG.md's entries start. */
+/** The description with a capital first letter, as CHANGELOG.md's entries start; marked if breaking. */
 function entryText(parsed) {
   const d = parsed.description;
   return `${parsed.breaking ? '**Breaking:** ' : ''}${d.charAt(0).toUpperCase()}${d.slice(1)}`;
 }
 
-const breaking = (c) => /^BREAKING[ -]CHANGE:/m.test(c.body);
-
-/** A commit as a draft item: {subject, sha, parsed, section} (section: see sectionOf). */
+/**
+ * A commit as a draft item: {subject, sha, parsed, section} (section: see sectionOf). A
+ * "BREAKING CHANGE:" footer in its body makes it breaking, like a "!" after the type.
+ */
 function commitItem(c) {
   const parsed = parseSubject(c.subject);
-  if (breaking(c)) parsed.breaking = true;
+  if (/^BREAKING[ -]CHANGE:/m.test(c.body)) parsed.breaking = true;
   return { subject: c.subject, sha: c.sha, parsed, section: sectionOf(parsed) };
 }
 
@@ -165,22 +169,26 @@ function render({ from, to, entries, left }, { summary = false } = {}) {
   return `${out.join('\n')}\n`;
 }
 
+// Errors go to stderr, not report()'s annotation on stdout: in Actions, stdout is the job summary.
 function main(argv) {
-  const summary = argv.includes('--summary');
-  const args = argv.filter((a) => a !== '--summary');
-  if (args.length > 1 || args.some((a) => a.startsWith('-'))) {
-    console.error('Usage: node scripts/changelog-draft.js [<from>..<to> | <from>] [--summary]');
+  let values;
+  let positionals;
+  try {
+    ({ values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { summary: { type: 'boolean', default: false } } }));
+    if (positionals.length > 1) throw new Error(`Unexpected argument: ${positionals[1]}`);
+  } catch (err) {
+    console.error(`${err.message}\nUsage: node scripts/changelog-draft.js [<from>..<to> | <from>] [--summary]`);
     return 1;
   }
   try {
-    process.stdout.write(render(draft(process.cwd(), args[0]), { summary }));
+    process.stdout.write(render(draft(process.cwd(), positionals[0]), { summary: values.summary }));
     return 0;
   } catch (err) {
-    console.error(err.stderr ? String(err.stderr).trim() || err.message : err.message);
+    console.error(errorText(err));
     return 1;
   }
 }
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { draft, render, resolveRange };
+module.exports = { draft, render };

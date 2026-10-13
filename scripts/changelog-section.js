@@ -7,29 +7,42 @@
 // section is missing or empty.
 const fs = require('node:fs');
 const path = require('node:path');
-const { findSection, sectionName, unwrap } = require('./changelog');
+const { parseArgs } = require('node:util');
+const { findSection, sectionName, unwrap, report } = require('./changelog');
+
+const USAGE = 'Usage: node scripts/changelog-section.js <version> [--unwrap] [--file <path>]';
 
 function main(argv) {
-  let file = path.join(__dirname, '..', 'CHANGELOG.md');
-  let version = null;
-  let flat = false;
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--unwrap') flat = true;
-    else if (argv[i] === '--file' && i + 1 < argv.length) file = argv[++i];
-    else if (!argv[i].startsWith('-') && version === null) version = argv[i];
-    else return fail(`Unexpected argument: ${argv[i]}`);
+  let values;
+  let positionals;
+  try {
+    ({ values, positionals } = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: { unwrap: { type: 'boolean', default: false }, file: { type: 'string', default: path.join(__dirname, '..', 'CHANGELOG.md') } },
+    }));
+  } catch (err) {
+    return fail(`${err.message}\n${USAGE}`);
   }
-  if (!version) return fail('Usage: node scripts/changelog-section.js <version> [--unwrap] [--file <path>]');
-  const section = findSection(fs.readFileSync(file, 'utf8'), version);
-  if (!section) return fail(`${path.basename(file)} has no "## [${sectionName(version)}]" section.`);
-  if (!section.body) return fail(`The [${section.name}] section of ${path.basename(file)} is empty.`);
-  process.stdout.write(`${flat ? unwrap(section.body) : section.body}\n`);
+  if (positionals.length !== 1) return fail(USAGE);
+  const [version] = positionals;
+  const name = path.basename(values.file);
+  let text;
+  try {
+    text = fs.readFileSync(values.file, 'utf8');
+  } catch (err) {
+    return fail(`Can't read ${values.file}: ${err.message}`);
+  }
+  const section = findSection(text, version);
+  if (!section) return fail(`${name} has no "## [${sectionName(version)}]" section.`);
+  if (!section.body) return fail(`The [${section.name}] section of ${name} is empty.`);
+  process.stdout.write(`${values.unwrap ? unwrap(section.body) : section.body}\n`);
   return 0;
 }
 
 function fail(message) {
-  console.error(message);
+  report('error', message);
   return 1;
 }
 
-process.exitCode = main(process.argv.slice(2));
+if (require.main === module) process.exitCode = main(process.argv.slice(2));

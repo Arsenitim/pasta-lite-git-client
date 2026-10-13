@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { git, initRepo, write } = require('./helpers');
+const { git, initRepo, tmpDir, write } = require('./helpers');
 const { parseChangelog, findSection, sectionName, unwrap, parseSubject, sectionOf, isEntry } = require('../scripts/changelog');
 const { draft, render } = require('../scripts/changelog-draft');
 const { prChanges, verdict } = require('../scripts/changelog-pr-check');
@@ -127,7 +127,9 @@ test('releaseProblems: a missing, undated or empty section fails; a missing link
 });
 
 test('changelog-section.js: prints a section, unwrapped on request; a missing or empty one exits 1', () => {
-  const run = (...args) => spawnSync(process.execPath, [path.join(SCRIPTS, 'changelog-section.js'), ...args], { encoding: 'utf8' });
+  const run = (...args) => spawnSync(process.execPath, [path.join(SCRIPTS, 'changelog-section.js'), ...args], {
+    encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: '' },
+  });
   let r = run('v1.0.0', '--file', FIXTURE);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, '### Added\n\n- The first release.\n');
@@ -138,12 +140,19 @@ test('changelog-section.js: prints a section, unwrapped on request; a missing or
   assert.equal(r.status, 1);
   assert.equal(r.stdout, '');
   assert.match(r.stderr, /has no "## \[2\.0\.0\]" section/);
-  const dir = initRepo({ commits: false });
+  const dir = tmpDir();
   write(dir, 'CHANGELOG.md', '## [Unreleased]\n\n## [1.0.0] - 2026-09-01\n\n- x\n');
   r = run('Unreleased', '--file', path.join(dir, 'CHANGELOG.md'));
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /The \[Unreleased\] section of CHANGELOG\.md is empty/);
-  assert.equal(run().status, 1);
+  assert.match(r.stderr, /^error: The \[Unreleased\] section of CHANGELOG\.md is empty/);
+  r = run('v1.0.0', '--file', path.join(dir, 'missing.md'));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^error: Can't read .*missing\.md: /);
+  for (const args of [[], ['1.0.0', '1.1.0'], ['1.0.0', '--bogus'], ['1.0.0', '--file']]) {
+    r = run(...args);
+    assert.equal(r.status, 1, args.join(' '));
+    assert.match(r.stderr, /Usage: node scripts\/changelog-section\.js/, args.join(' '));
+  }
 });
 
 let fileCount = 0;
@@ -249,6 +258,7 @@ test('draft: the default range starts at the last v* tag before HEAD, or covers 
   assert.deepEqual(draft(dir, 'v1.0.0..other-tag').entries.map((e) => e.text), ['Second']);
   assert.deepEqual(draft(dir, 'other-tag').entries.map((e) => e.text), ['Third']);
   assert.throws(() => draft(dir, '--output=x'), /Not a revision/);
+  assert.throws(() => draft(dir, 'v1.0.0...HEAD'), /Not a range: "v1\.0\.0\.\.\.HEAD"/);
   assert.throws(() => draft(dir, 'nope..HEAD'), /Not a commit: nope/);
 });
 
@@ -266,6 +276,9 @@ test('changelog-draft.js: prints the draft; a bad range exits 1', () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /Not a commit: nope/);
   assert.equal(run('-x').status, 1);
+  r = run('HEAD', 'HEAD');
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^Unexpected argument: HEAD\nUsage: /);
 });
 
 /** A repo whose main has CHANGELOG.md with an empty [Unreleased] section and src/app.js. */
@@ -343,7 +356,16 @@ test('changelog-pr-check.js: exits 1 with an annotation in Actions, 0 when the P
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, 'The [Unreleased] section of CHANGELOG.md is updated.\n');
   assert.equal(run({}, '--base', '--upload-pack=x', '--head', 'pr').status, 1);
-  assert.equal(run({}, '--bogus').status, 1);
+  r = run({}, '--base=--upload-pack=x', '--head', 'pr');
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^error: Not a revision for --base: "--upload-pack=x"/);
+  r = run({}, '--bogus');
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Usage: node scripts\/changelog-pr-check\.js/);
+  // A git failure is git's own message.
+  r = run({}, '--base', 'no-such-branch');
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^error: .*no-such-branch/);
 });
 
 test('release-check.js: package.json\'s version has a dated CHANGELOG.md section, and a wrong tag fails', () => {

@@ -7,6 +7,7 @@
 // warnings (no link reference for the version, entries left under [Unreleased]) don't.
 const fs = require('node:fs');
 const path = require('node:path');
+const { parseArgs } = require('node:util');
 const { parseChangelog, report } = require('./changelog');
 
 const TAG = /^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/;
@@ -40,14 +41,43 @@ function releaseProblems({ tag, pkg, lock, changelog }) {
   return { errors, warnings };
 }
 
+/** The repository's file `file` (relative to `root`); an error that says which file and why. */
+function readFile(root, file) {
+  try {
+    return fs.readFileSync(path.join(root, file), 'utf8');
+  } catch (err) {
+    throw new Error(`Can't read ${file}: ${err.code === 'ENOENT' ? 'there is no such file' : err.message}.`, { cause: err });
+  }
+}
+
+function readJson(root, file) {
+  const text = readFile(root, file);
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${file} isn't valid JSON: ${err.message}.`, { cause: err });
+  }
+}
+
 function main(argv) {
+  let positionals;
+  try {
+    ({ positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} }));
+    if (positionals.length > 1) throw new Error(`Unexpected argument: ${positionals[1]}`);
+  } catch (err) {
+    report('error', `${err.message}\nUsage: node scripts/release-check.js [<tag>]`);
+    return 1;
+  }
   const root = path.join(__dirname, '..');
-  const readJson = (file) => JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
-  const pkg = readJson('package.json');
-  const tag = argv[0] || `v${pkg.version}`;
-  const { errors, warnings } = releaseProblems({
-    tag, pkg, lock: readJson('package-lock.json'), changelog: fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'),
-  });
+  let files;
+  try {
+    files = { pkg: readJson(root, 'package.json'), lock: readJson(root, 'package-lock.json'), changelog: readFile(root, 'CHANGELOG.md') };
+  } catch (err) {
+    report('error', err.message);
+    return 1;
+  }
+  const tag = positionals[0] || `v${files.pkg.version}`;
+  const { errors, warnings } = releaseProblems({ tag, ...files });
   for (const w of warnings) report('warning', w);
   for (const e of errors) report('error', e);
   if (!errors.length) console.log(`${tag}: package.json, package-lock.json and CHANGELOG.md agree.`);

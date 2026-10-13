@@ -7,7 +7,8 @@
 // renderer/ or src/. Then [Unreleased] must differ between the merge base and <head>. Exits 1 when
 // it doesn't. .github/workflows/changelog.yml runs it on each PR, unless the PR has the
 // skip-changelog label (for a change no user notices: a refactor, a test-only fix in src/).
-const { git, checkRev, findSection, parseSubject, sectionOf, isEntry, report } = require('./changelog');
+const { parseArgs } = require('node:util');
+const { git, checkRev, findSection, parseSubject, sectionOf, isEntry, errorText, report } = require('./changelog');
 
 const APP_FILES = /^(main\.js|preload[^/]*\.js|(main|renderer|src)\/)/;
 
@@ -52,23 +53,22 @@ function verdict({ commits, files, changelog }) {
 }
 
 function main(argv) {
-  let base = 'origin/main';
-  let head = 'HEAD';
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--base' && i + 1 < argv.length) base = argv[++i];
-    else if (argv[i] === '--head' && i + 1 < argv.length) head = argv[++i];
-    else {
-      console.error('Usage: node scripts/changelog-pr-check.js [--base <rev>] [--head <rev>]');
-      return 1;
-    }
+  let values;
+  try {
+    ({ values } = parseArgs({
+      args: argv, options: { base: { type: 'string', default: 'origin/main' }, head: { type: 'string', default: 'HEAD' } },
+    }));
+  } catch (err) {
+    report('error', `${err.message}\nUsage: node scripts/changelog-pr-check.js [--base <rev>] [--head <rev>]`);
+    return 1;
   }
   try {
-    const { ok, message } = verdict(prChanges(process.cwd(), checkRev(base, '--base'), checkRev(head, '--head')));
+    const { ok, message } = verdict(prChanges(process.cwd(), checkRev(values.base, '--base'), checkRev(values.head, '--head')));
     if (ok) console.log(message);
     else report('error', message);
     return ok ? 0 : 1;
   } catch (err) {
-    console.error(err.stderr ? String(err.stderr).trim() || err.message : err.message);
+    report('error', errorText(err));
     return 1;
   }
 }

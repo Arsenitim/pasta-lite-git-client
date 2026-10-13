@@ -146,6 +146,11 @@ function checkRev(rev, what) {
   return rev;
 }
 
+/** What to tell the user about a failure: git's own stderr when git failed, else the message. */
+function errorText(err) {
+  return (err.stderr && String(err.stderr).trim()) || err.message;
+}
+
 /** A message for the user: a GitHub annotation (::error:: / ::warning::) when running in Actions. */
 function report(level, message) {
   // A workflow command's message escapes %, CR and LF (GitHub's toolkit does the same).
@@ -155,5 +160,6 @@ function report(level, message) {
 }
 
 module.exports = {
-  parseChangelog, sectionName, findSection, unwrap, parseSubject, sectionOf, isEntry, git, checkRev, report,
+  parseChangelog, sectionName, findSection, unwrap, parseSubject, sectionOf, isEntry,
+  git, checkRev, errorText, report,
 };
