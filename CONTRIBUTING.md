@@ -217,28 +217,41 @@ asar integrity check apply to the Windows executable as well.
 
 ## Publishing a release
 
-1. Update the version in `package.json` (and `package-lock.json`) and `CHANGELOG.md`, and merge
-   that to `main`.
-2. Tag the merge commit and push the tag:
+The release notes are the release's section of `CHANGELOG.md`, which PRs have filled in as they
+were merged ([Changelog](#changelog)): nothing is written from scratch at release time.
+
+1. Check `[Unreleased]` against what was merged: run Actions → changelog → Run workflow, which
+   writes a draft from the merged PRs and commits since the last tag into the run's summary, or
+   `npm run changelog:draft` locally. Give anything user-facing that's missing an entry, in the
+   changelog's own words; the draft lists changes, it isn't text to paste.
+2. Update the version in `package.json` and `package-lock.json`
+   (`npm version <version> --no-git-tag-version`). In `CHANGELOG.md`, turn `## [Unreleased]` into
+   `## [<version>] - <YYYY-MM-DD>`, add an empty `## [Unreleased]` above it, and update the link
+   references at the end. `npm run release:check` checks that they agree. Merge that to `main`.
+3. Tag the merge commit and push the tag:
 
    ```sh
    git tag v<version>
    git push origin v<version>
    ```
 
-   The tag starts `.github/workflows/release.yml`. Its `build` job, on a Windows runner with a
-   read-only token, checks that the tag matches the version in `package.json`, builds the Windows
-   installers and the zip with `npx electron-builder --win --publish never`, and writes
+   The tag starts `.github/workflows/release.yml`. Its `check` job runs `release:check` for the
+   tag first and fails the workflow before anything is built if the tag isn't `package.json`'s
+   version or `CHANGELOG.md` has no dated section for it; it keeps that section, unwrapped, as the
+   release notes (`npm run changelog:section -- <version> --unwrap`). Its `build` job, on a
+   Windows runner with a read-only token, builds the Windows installers and the zip with
+   `npx electron-builder --win --publish never`, and writes
    `Pasta-Lite-<version>-SHA256SUMS-windows.txt` for them (`<hash>  <file>` lines, as
    `sha256sum -c` reads them), since they aren't signed. It keeps these files as a workflow
    artifact named `windows`. Its `publish` job then attaches them to the GitHub release for the
-   tag, which it creates as a draft prerelease if there's none yet. It only ever changes a draft:
+   tag, which it creates as a draft prerelease with those notes (and a note on the Windows builds)
+   if there's none yet; a draft you made with no notes gets them too. It only ever changes a draft:
    if the release is already published, the job fails and leaves the release's files alone, and
    if the draft gets published while the job is attaching its files, the job fails loudly too.
    Only a re-run replaces files (of the draft) it attached before.
    Running the workflow by hand on a branch (Actions → release → Run workflow) builds the
    workflow artifact only.
-3. On a Mac, build, sign and notarize the DMGs from the same tag
+4. On a Mac, build, sign and notarize the DMGs from the same tag
    ([Release build](#release-build-maintainers)), then add them to the same release:
 
    ```sh
@@ -248,8 +261,8 @@ asar integrity check apply to the Windows executable as well.
    Wait for the workflow to create the draft first, or create the release yourself
    (`gh release create v<version> --draft --prerelease`): the workflow then attaches its files to
    that one. Don't publish the release before the workflow has attached the Windows files.
-4. Write the release notes from `CHANGELOG.md` and publish the release. It should carry two DMGs,
-   two `-setup.exe` installers, the zip and the SHA256SUMS file.
+5. Read the notes over and publish the release. It should carry two DMGs, two `-setup.exe`
+   installers, the zip and the SHA256SUMS file. A fix to the notes belongs in `CHANGELOG.md` too.
 
 ## Architecture
 
@@ -361,6 +374,20 @@ chore: relicense under Apache 2.0
 - Write the subject in lower case, in the imperative or as a noun phrase, with no trailing period.
   Use the body to explain why.
 
+## Changelog
+
+`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and is written by
+hand, for users: what they notice and why it matters, not what the commits did. A PR with a
+user-facing change adds its entry under `## [Unreleased]`, in the section that fits (`Added`,
+`Changed`, `Fixed`, `Security`; Windows-only fixes under "On Windows:"), so the changelog is ready
+when the release is cut.
+
+The changelog workflow (`.github/workflows/changelog.yml`) checks that: a PR with `feat` or `fix`
+commits, or changes to `main.js`, the preloads, `main/`, `renderer/` or `src/`, fails its
+"changelog entry" check until it changes `[Unreleased]`. Run it locally with
+`npm run changelog:check` (against `origin/main`). A maintainer adds the `skip-changelog` label to
+a PR that needs no entry, such as a refactor or a fix to tests.
+
 ## License of contributions
 
 By contributing, you agree that your contributions are licensed under the
@@ -373,6 +400,8 @@ license). There is no CLA.
 - **Add or update tests** for every behaviour change, and run `npm test` before you push. CI runs
   it on macOS, Ubuntu and Windows.
 - **Run `npm run lint`** and don't add findings.
+- **Add a changelog entry** under `## [Unreleased]` for a change users notice
+  ([Changelog](#changelog)).
 - For UI changes, include a screenshot. A smoke-run PNG is fine.
 - If the change alters how a part works, update its header comment, and the Architecture section
   above if the change moves responsibilities between parts.

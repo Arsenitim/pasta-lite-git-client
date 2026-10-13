@@ -12,5 +12,6 @@
 - [ ] `npm test` passes
 - [ ] `npm run lint` adds no new findings
 - [ ] Tests cover the change
+- [ ] `CHANGELOG.md`'s `[Unreleased]` section has an entry, if users will notice the change
 - [ ] The PR is focused on one change
 - [ ] Header comments (and the Architecture section of `CONTRIBUTING.md`) are updated if the design changed
