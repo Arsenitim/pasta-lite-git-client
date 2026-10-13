@@ -1,0 +1,82 @@
+name: changelog
+
+on:
+  # labeled and unlabeled: adding or removing the skip-changelog label runs the check again (only
+  # this workflow, not the test matrix).
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  # Before a release: Actions → changelog → Run workflow drafts the changelog since the last tag.
+  workflow_dispatch:
+    inputs:
+      range:
+        description: 'Range to draft, <from>..<to> or <from> (default: the last v* tag..HEAD)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A PR that changes the app (a feat or fix commit, or a change to main.js, the preloads, main/,
+  # renderer/ or src/) must add to CHANGELOG.md's [Unreleased] section (scripts/changelog-pr-check.js),
+  # so the changelog is written with the change, not at release time. The check fails rather than
+  # warns: a warning is an annotation nobody opens, and a missing entry is what the check is for.
+  # It isn't a required check, so a maintainer can still merge past it; the skip-changelog label
+  # says on the PR that it needs no entry (a refactor, a change to tests) and turns the check off.
+  entry:
+    name: changelog entry
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Actions are pinned to a commit (a tag can be moved); the comment names its release.
+      # The whole history: the check reads the PR's commits since its merge base with main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Check CHANGELOG.md
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/changelog-pr-check.js --base "$BASE_SHA" --head "$HEAD_SHA"
+
+      - name: Skipped by label
+        if: ${{ contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+        run: echo "The skip-changelog label is set, so no changelog entry is needed."
+
+  # The draft from the merged PRs and commits, in the run's summary: a starting point to curate
+  # into [Unreleased] (scripts/changelog-draft.js), never the text to publish. Read-only.
+  draft:
+    name: draft changelog
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The whole history and the tags: the draft starts at the last v* tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # The input goes in through the environment, never into the script's text; the script refuses
+      # a range that starts with "-".
+      - name: Draft
+        env:
+          RANGE: ${{ inputs.range }}
+        run: node scripts/changelog-draft.js --summary ${RANGE:+"$RANGE"} >> "$GITHUB_STEP_SUMMARY"
