@@ -7,7 +7,7 @@
 // renderer/ or src/. Then [Unreleased] must differ between the merge base and <head>. Exits 1 when
 // it doesn't. .github/workflows/changelog.yml runs it on each PR, unless the PR has the
 // skip-changelog label (for a change no user notices: a refactor, a test-only fix in src/).
-const { git, checkRev, findSection, parseSubject, sectionOf, report } = require('./changelog');
+const { git, checkRev, findSection, parseSubject, sectionOf, isEntry, report } = require('./changelog');
 
 const APP_FILES = /^(main\.js|preload[^/]*\.js|(main|renderer|src)\/)/;
 
@@ -30,10 +30,7 @@ function unreleasedAt(cwd, rev) {
 function prChanges(cwd, base, head) {
   const mergeBase = git(cwd, ['merge-base', '--end-of-options', base, head]).trim();
   const subjects = git(cwd, ['log', '--no-merges', '--format=%s', '--end-of-options', `${mergeBase}..${head}`]).split('\n').filter(Boolean);
-  const commits = subjects.filter((s) => {
-    const section = sectionOf(parseSubject(s));
-    return section !== null && section !== undefined;
-  });
+  const commits = subjects.filter((s) => isEntry(sectionOf(parseSubject(s))));
   const files = git(cwd, ['diff', '--name-only', '--no-renames', mergeBase, head, '--']).split('\n').filter((f) => APP_FILES.test(f));
   return { commits, files, changelog: unreleasedAt(cwd, mergeBase) !== unreleasedAt(cwd, head) };
 }

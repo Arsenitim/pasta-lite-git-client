@@ -15,7 +15,7 @@
 // commits are listed under it. Types that aren't user-facing (test, docs, chore, ci, build,
 // style, refactor) are left out and only counted at the end. --summary writes the counts as text
 // instead of HTML comments, for a GitHub job summary (.github/workflows/changelog.yml).
-const { git, checkRev, parseSubject, sectionOf } = require('./changelog');
+const { git, checkRev, parseSubject, sectionOf, isEntry } = require('./changelog');
 
 // Keep a Changelog's order.
 const SECTIONS = ['Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'];
@@ -23,6 +23,8 @@ const MERGE_PR = /^Merge pull request #(\d+) from (\S+)/;
 const SQUASH_PR = /^(.*\S)\s+\(#(\d+)\)$/;
 // Where a PR goes from its commits when its title and branch say nothing: the most notable first.
 const PRIORITY = ['Security', 'Added', 'Fixed', 'Changed'];
+// A commit that says nothing still changed something: it goes under Changed for the curator to sort.
+const changed = (section) => (section === 'unknown' ? 'Changed' : section);
 
 /** Commits of `git log <args>`: [{sha, parents, subject, body}]. */
 function log(cwd, args) {
@@ -92,9 +94,8 @@ function draft(cwd, rangeArg) {
   const short = (sha) => sha.slice(0, 7);
   const addCommit = (c) => {
     const item = commitItem(c);
-    const section = item.section === undefined ? 'Changed' : item.section;
-    if (section === null) left.push({ ref: short(c.sha), subject: c.subject });
-    else entries.push({ section, text: entryText(item.parsed), ref: short(c.sha), details: [] });
+    if (item.section === 'skip') left.push({ ref: short(c.sha), subject: c.subject });
+    else entries.push({ section: changed(item.section), text: entryText(item.parsed), ref: short(c.sha), details: [] });
   };
   for (const c of log(cwd, ['--first-parent', '--reverse', '--end-of-options', ...revs])) {
     const merge = MERGE_PR.exec(c.subject);
@@ -118,17 +119,17 @@ function draft(cwd, rangeArg) {
     const parsed = parseSubject(title);
     if (commits.some((i) => i.parsed.breaking)) parsed.breaking = true;
     let section = sectionOf(parsed);
-    if (section === undefined) section = sectionOf(parseSubject(branch.replace(/^([a-z]+)[/-]/i, '$1: ')));
-    if (section === undefined) {
-      const found = new Set(commits.map((i) => i.section));
-      section = PRIORITY.find((s) => found.has(s)) || (found.has(undefined) ? 'Changed' : null);
+    if (section === 'unknown') section = sectionOf(parseSubject(branch.replace(/^([a-z]+)[/-]/i, '$1: ')));
+    if (section === 'unknown') {
+      const found = new Set(commits.map((i) => changed(i.section)));
+      section = PRIORITY.find((s) => found.has(s)) || 'skip';
     }
-    if (section === null) {
+    if (section === 'skip') {
       left.push({ ref: `#${number}`, subject: title });
       return;
     }
     // The PR's own user-facing commits, but not one that repeats its title.
-    const details = commits.filter((i) => i.section && i.parsed.description !== parsed.description)
+    const details = commits.filter((i) => isEntry(i.section) && i.parsed.description !== parsed.description)
       .map((i) => `${i.subject} (${short(i.sha)})`);
     entries.push({ section, text: entryText(parsed), ref: `#${number}`, details });
   }

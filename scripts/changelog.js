@@ -116,15 +116,19 @@ function parseSubject(subject) {
 
 /**
  * The Keep a Changelog section a parsed subject belongs in: 'Added', 'Changed', 'Fixed' or
- * 'Security'; null for a type that isn't user-facing (test, docs, ...); undefined when the subject
- * says nothing (not conventional, or a type of its own). A security scope or word wins over the type.
+ * 'Security'; 'skip' for a type that isn't user-facing (test, docs, ...); 'unknown' when the
+ * subject says nothing (not conventional, or a type of its own). A security scope or word wins
+ * over the type. isEntry tells a section from the other two.
  */
 function sectionOf(parsed) {
-  if (!parsed.type) return undefined;
-  if (NOT_USER_FACING.has(parsed.type)) return null;
+  if (!parsed.type) return 'unknown';
+  if (NOT_USER_FACING.has(parsed.type)) return 'skip';
   if (parsed.type === 'security' || parsed.scope === 'security' || SECURITY.test(parsed.description)) return 'Security';
-  return Object.hasOwn(TYPE_SECTIONS, parsed.type) ? TYPE_SECTIONS[parsed.type] : undefined;
+  return Object.hasOwn(TYPE_SECTIONS, parsed.type) ? TYPE_SECTIONS[parsed.type] : 'unknown';
 }
+
+/** Whether sectionOf's `section` is a changelog section (not 'skip' or 'unknown'). */
+const isEntry = (section) => section !== 'skip' && section !== 'unknown';
 
 /**
  * Synchronous git in `cwd`, its stdout. The -c overrides keep a user's config from changing what
@@ -151,6 +155,5 @@ function report(level, message) {
 }
 
 module.exports = {
-  parseChangelog, sectionName, findSection, unwrap, parseSubject, sectionOf, git, checkRev, report,
-  NOT_USER_FACING,
+  parseChangelog, sectionName, findSection, unwrap, parseSubject, sectionOf, isEntry, git, checkRev, report,
 };

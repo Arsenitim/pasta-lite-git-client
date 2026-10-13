@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { git, initRepo, write } = require('./helpers');
-const { parseChangelog, findSection, sectionName, unwrap, parseSubject, sectionOf } = require('../scripts/changelog');
+const { parseChangelog, findSection, sectionName, unwrap, parseSubject, sectionOf, isEntry } = require('../scripts/changelog');
 const { draft, render } = require('../scripts/changelog-draft');
 const { prChanges, verdict } = require('../scripts/changelog-pr-check');
 const { releaseProblems } = require('../scripts/release-check');
@@ -76,7 +76,7 @@ test('unwrap: paragraphs and list items on one line; fences, headings, nested it
   assert.equal(unwrap('Some text\n1. first\n2. second\n> quote\n| a | b |\n| - | - |'), 'Some text\n1. first\n2. second\n> quote\n| a | b |\n| - | - |');
 });
 
-test('parseSubject and sectionOf: conventional types to Keep a Changelog sections', () => {
+test('parseSubject, sectionOf and isEntry: conventional types to Keep a Changelog sections', () => {
   assert.deepEqual(parseSubject('feat(renderer)!: drop the old view'), { type: 'feat', scope: 'renderer', breaking: true, description: 'drop the old view' });
   assert.deepEqual(parseSubject('Windows alpha builds'), { type: null, scope: null, breaking: false, description: 'Windows alpha builds' });
   const of = (s) => sectionOf(parseSubject(s));
@@ -90,11 +90,12 @@ test('parseSubject and sectionOf: conventional types to Keep a Changelog section
   assert.equal(of('feat: a security setting'), 'Security');
   // Not user-facing, whatever the subject says.
   for (const s of ['test(remote): x', 'docs: security policy', 'chore: release 0.2.1', 'ci: run on Windows', 'build: pin eslint', 'refactor(src): y', 'style: z']) {
-    assert.equal(of(s), null, s);
+    assert.equal(of(s), 'skip', s);
   }
   // Nothing to go on.
-  assert.equal(of('Windows alpha builds'), undefined);
-  assert.equal(of('release(x): 1.0'), undefined);
+  assert.equal(of('Windows alpha builds'), 'unknown');
+  assert.equal(of('release(x): 1.0'), 'unknown');
+  assert.deepEqual(['Added', 'Security', 'skip', 'unknown'].map(isEntry), [true, true, false, false]);
 });
 
 test('releaseProblems: the tag, package.json, package-lock.json and the dated section agree', () => {
