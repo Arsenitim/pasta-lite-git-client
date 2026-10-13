@@ -8,6 +8,8 @@ minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-13
+
 ### Added
 
 - **Clone Repository…** (File menu, ⇧⌘N / Ctrl+Shift+N, or Clone… on the start screen and in the
@@ -93,8 +95,7 @@ On Windows:
   with its error and the op ends with the explanation: on a Windows desktop an unknown host key
   now fails in about 0.7 s and a passphrase-protected key in about 1.1 s, and no console window
   shows. An askpass you set yourself (`SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`) is left alone; MinGit
-  has no `false.exe`. Not yet checked by hand: Git Credential Manager's sign-in window over HTTPS
-  (docs/plans/ssh-remote-errors.md §13, W12).
+  has no `false.exe`.
 - Git for Windows is found in its usual install folders (machine-wide or per user) when it isn't on
   the PATH.
 - NTFS aliases of `.git` (its 8.3 short name, trailing dots or spaces, alternate data streams) are
@@ -131,6 +132,12 @@ Hardening against repositories from elsewhere (a downloaded or unzipped folder w
   editor: git runs a fixed shell command instead.
 - `npm run lint` runs ESLint from exact-pinned devDependencies locked in `package-lock.json`
   instead of fetching its dependencies with `npx`.
+
+### Known issues
+
+- On Windows, Git Credential Manager's sign-in window over HTTPS hasn't been checked by hand with
+  the askpass change under Fixed; its automated checks pass (docs/plans/ssh-remote-errors.md §13,
+  W12).
 
 ## [0.2.1] - 2026-10-04
 
@@ -255,7 +262,8 @@ or run it from source with Node.js 22.12 or newer.
 - Authentication has only been tested against a local server. Real HTTPS and SSH remotes and
   credential helpers have not been checked end to end yet.
 
-[Unreleased]: https://github.com/SilverClash/pasta-lite-git-client/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/SilverClash/pasta-lite-git-client/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/SilverClash/pasta-lite-git-client/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/SilverClash/pasta-lite-git-client/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/SilverClash/pasta-lite-git-client/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/SilverClash/pasta-lite-git-client/releases/tag/v0.1.0
