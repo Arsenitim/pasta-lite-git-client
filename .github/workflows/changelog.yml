@@ -17,6 +17,8 @@ on:
 permissions:
   contents: read
 
+# A newer run for the same PR cancels the older one. The entry check reads the PR's labels when it
+# runs, so the run that's left gets the label right whichever event started it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -34,16 +36,40 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Read-only, a fork's PR included: the code, and the PR's labels (pull-requests: read).
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
+      # The PR's labels as they are now, not as the event saw them: a push and the label seconds
+      # apart start two runs, the concurrency group cancels one, and the payload of the run that's
+      # left can predate the label. Whichever run is left asks GitHub, so it gives the right answer.
+      # The PR number goes in through the environment, never into the script's text.
+      - name: Read the skip-changelog label
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          skip="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq 'any(.labels[]; .name == "skip-changelog")')"
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Skipped by label
+        if: steps.label.outputs.skip == 'true'
+        run: echo "The skip-changelog label is set, so no changelog entry is needed."
+
       # Actions are pinned to a commit (a tag can be moved); the comment names its release.
       # The whole history: the check reads the PR's commits since its merge base with main. What's
       # checked out is GitHub's merge of the PR into main.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.label.outputs.skip != 'true'
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.label.outputs.skip != 'true'
         with:
           node-version: 22
 
@@ -51,16 +77,12 @@ jobs:
       # event's base.sha can be older). The head is the PR's own last commit, and the script reads
       # what the PR changed since its merge base with that main.
       - name: Check CHANGELOG.md
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+        if: steps.label.outputs.skip != 'true'
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           base="$(git rev-parse --verify 'HEAD^1')"
           node scripts/changelog-pr-check.js --base "$base" --head "$HEAD_SHA"
-
-      - name: Skipped by label
-        if: ${{ contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
-        run: echo "The skip-changelog label is set, so no changelog entry is needed."
 
   # The draft from the merged PRs and commits, in the run's summary: a starting point to curate
   # into [Unreleased] (scripts/changelog-draft.js), never the text to publish. Read-only.

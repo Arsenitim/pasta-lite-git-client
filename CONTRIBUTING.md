@@ -397,7 +397,9 @@ commits ([Commits](#commits)), changes to `main.js`, the preloads, `main/`, `ren
 Electron version, runtime `dependencies`, `main` or `build` settings, but not its scripts or other
 dev tools) fails its "changelog entry" check until it changes `[Unreleased]`. Run it locally with
 `npm run changelog:check` (against `origin/main`). A maintainer adds the `skip-changelog` label to
-a PR that needs no entry, such as a refactor or a fix to tests.
+a PR that needs no entry, such as a refactor or a fix to tests. Adding or removing the label runs
+the check again, and the check reads the PR's labels when it runs, not from the event that started
+it.
 
 ## License of contributions
 
