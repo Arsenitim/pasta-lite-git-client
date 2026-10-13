@@ -22,9 +22,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # A PR that changes the app (a feat or fix commit, or a change to main.js, the preloads, main/,
-  # renderer/ or src/) must add to CHANGELOG.md's [Unreleased] section (scripts/changelog-pr-check.js),
-  # so the changelog is written with the change, not at release time. The check fails rather than
+  # A PR that changes the app (a user-facing commit, a change to the app's files, or to what
+  # package.json says about the app that ships: scripts/changelog-pr-check.js) must add to
+  # CHANGELOG.md's [Unreleased] section, so the changelog is written with the change, not at
+  # release time. The check fails rather than
   # warns: a warning is an annotation nobody opens, and a missing entry is what the check is for.
   # It isn't a required check, so a maintainer can still merge past it; the skip-changelog label
   # says on the PR that it needs no entry (a refactor, a change to tests) and turns the check off.
@@ -35,7 +36,8 @@ jobs:
     timeout-minutes: 5
     steps:
       # Actions are pinned to a commit (a tag can be moved); the comment names its release.
-      # The whole history: the check reads the PR's commits since its merge base with main.
+      # The whole history: the check reads the PR's commits since its merge base with main. What's
+      # checked out is GitHub's merge of the PR into main.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -45,12 +47,16 @@ jobs:
         with:
           node-version: 22
 
+      # The base is the merge commit's first parent: main as GitHub merged the PR into it (the
+      # event's base.sha can be older). The head is the PR's own last commit, and the script reads
+      # what the PR changed since its merge base with that main.
       - name: Check CHANGELOG.md
         if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/changelog-pr-check.js --base "$BASE_SHA" --head "$HEAD_SHA"
+        run: |
+          base="$(git rev-parse --verify 'HEAD^1')"
+          node scripts/changelog-pr-check.js --base "$base" --head "$HEAD_SHA"
 
       - name: Skipped by label
         if: ${{ contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
