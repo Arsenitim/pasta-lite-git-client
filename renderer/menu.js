@@ -3,10 +3,14 @@
 //   Components.menu.open(anchor, items, opts?)
 //     anchor: {x, y} (client coordinates, e.g. a contextmenu event) or an Element (the menu opens
 //             below it, left-aligned, flipped/clamped to stay inside the window)
-//     items:  [{label, action: () => void, danger?, disabled?, title?, checked?, pinned?} | {separator: true}]
-//     opts.search: {label, placeholder?, empty?} adds a search field above the items (search mode)
+//     items:  [{label, action: () => void, danger?, disabled?, title?, checked?, pinned?, searchOnly?} | {separator: true}]
+//     opts.search: {label, placeholder?, empty?, onQuery?(query)} adds a search field above the items
+//             (search mode); onQuery runs after each change of the query
 //     opts.onClose(): called once when the menu goes away (before a chosen item's action runs)
 //   Components.menu.filter(items, query) -> {shown, matched}: pure, what search mode shows
+//   Components.menu.update(items): replace the open menu's items (search mode keeps the query, and the
+//   highlighted item when one with its label is still shown); setNote(text): search mode's note under
+//   the field (e.g. "Fetching…"; '' hides it)
 //   Components.menu.close(), Components.menu.isOpen()
 //   Components.menu.swallowNextClick(el): drop the next click on el (a press on a popup's own anchor
 //   closed it; the click that follows must not reopen it). Also used by the repository picker.
@@ -20,7 +24,7 @@
 // Search mode (a dialog: a combobox over a listbox, driven by aria-activedescendant): the field takes
 // focus and keeps it (a press anywhere else in the popup doesn't move it); typing filters the items
 // (a case-insensitive substring of the label; pinned items and the separators between shown items
-// always show) and highlights the first enabled match, a pinned one only when nothing else matches;
+// always show; searchOnly items show only while there is a query) and highlights the first enabled match, a pinned one only when nothing else matches;
 // ↑ / ↓ / Home / End move the highlight (Shift+Home / Shift+End select in the field), Enter runs it
 // (not a held one, not while an IME composes), Esc clears the query (an empty one closes the menu),
 // Tab closes. With a query that matches nothing, opts.search.empty ("No matches") shows above the
@@ -47,16 +51,21 @@
    * What search mode shows for `query`: {shown: indices into items, matched: indices of the items
    * whose label contains the query, pinned ones included}. A case-insensitive substring of the
    * (trimmed) query; pinned items always show; a separator shows only between two shown items.
-   * An empty query shows every item and matches none. Pure.
+   * An empty query shows every item but the searchOnly ones and matches none. Pure.
    */
   function filter(items, query) {
     const list = Array.isArray(items) ? items : [];
     const q = String(query || '').trim().toLowerCase();
-    if (!q) return { shown: list.map((_, i) => i), matched: [] };
+    if (!q) return separated(list, list.map((it) => !!it && !it.separator && !it.searchOnly), []);
     const hit = (it) => !!it && !it.separator && String(it.label == null ? '' : it.label).toLowerCase().includes(q);
     const matched = [];
     list.forEach((it, i) => { if (hit(it)) matched.push(i); });
     const keep = list.map((it) => hit(it) || (!!it && !it.separator && !!it.pinned));
+    return separated(list, keep, matched);
+  }
+
+  /** filter's result for the items to `keep` (booleans): plus the separators between two kept items. */
+  function separated(list, keep, matched) {
     const shown = [];
     list.forEach((it, i) => {
       if (keep[i]) shown.push(i);
@@ -112,7 +121,8 @@
 
   function open(anchor, items, opts = {}) {
     close();
-    const list = (Array.isArray(items) ? items : []).filter(Boolean);
+    const itemsOf = (xs) => (Array.isArray(xs) ? xs : []).filter(Boolean);
+    let list = itemsOf(items);
     const previous = document.activeElement;
     const search = opts && opts.search ? opts.search : null;
     const id = search ? `pl-menu-${++seq}` : '';
@@ -131,8 +141,9 @@
       root.tabIndex = -1;
       root.setAttribute('role', 'menu');
     }
-    const hasCheck = list.some((x) => x.checked !== undefined);
-    const rows = list.map((it, i) => {
+    let hasCheck = false;
+    let rowSeq = 0; // row ids stay unique across update()s
+    const buildRows = () => list.map((it, i) => {
       if (it.separator) {
         const s = el('div', 'pl-menu-sep');
         s.setAttribute('role', search ? 'presentation' : 'separator'); // a listbox holds options only
@@ -140,7 +151,7 @@
       }
       const row = el('div', `pl-menu-item${it.danger ? ' pl-menu-danger' : ''}`);
       if (search) {
-        row.id = `${id}-${i}`;
+        row.id = `${id}-${++rowSeq}`;
         row.setAttribute('role', 'option');
         row.setAttribute('aria-selected', 'false');
       } else {
@@ -166,13 +177,18 @@
       });
       return row;
     });
+    hasCheck = list.some((x) => x.checked !== undefined);
+    let rows = buildRows();
     // Search mode's empty state: a status next to the field (not in the listbox), always in the
     // accessibility tree; its text changes (empty while something matches) so it is announced.
     const empty = search ? el('div', 'pl-menu-empty') : null;
+    // Search mode's note (setNote): a second status, e.g. what the caller is still loading.
+    const note = search ? el('div', 'pl-menu-note') : null;
     if (search) {
       empty.setAttribute('role', 'status');
+      note.setAttribute('role', 'status');
       box.append(...rows);
-      root.append(field.box, empty, box);
+      root.append(field.box, empty, note, box);
       // A press in the popup (a disabled row, the empty state, padding) keeps focus in the field.
       root.addEventListener('mousedown', (e) => { if (e.target !== field.input) e.preventDefault(); });
     } else {
@@ -207,7 +223,8 @@
 
     // Search mode: the items the query shows (the others are null here, so nextIndex skips them).
     let view = list;
-    function applyFilter() {
+    /** keep: an item to highlight again when it still shows and is enabled (update()). */
+    function applyFilter({ keep = null } = {}) {
       const q = field.input.value;
       const { shown, matched } = filter(list, q);
       const on = new Set(shown);
@@ -226,7 +243,27 @@
         if (unpinned !== undefined) first = unpinned;
         else if (enabled.length) first = enabled[0];
       }
-      focusAt(first, { scroll: true });
+      const again = keep ? list.findIndex((it, i) => on.has(i) && !it.separator && !it.disabled && it.label === keep.label) : -1;
+      focusAt(again >= 0 ? again : first, { scroll: true });
+    }
+
+    /** The query changed (typing, Esc): filter, then tell opts.search.onQuery. */
+    function queryChanged() {
+      applyFilter();
+      if (typeof search.onQuery !== 'function') return;
+      try { search.onQuery(field.input.value); } catch (e) { window.Components.util.log.error(e); }
+    }
+
+    /** Menu.update: new items in place of the old ones (search mode: same query, same highlight if it stays). */
+    function update(next) {
+      const keep = active >= 0 ? list[active] : null;
+      active = -1;
+      list = itemsOf(next);
+      hasCheck = list.some((x) => x.checked !== undefined);
+      rows = buildRows();
+      box.replaceChildren(...rows);
+      if (search) applyFilter({ keep });
+      else focusAt(nextIndex(list, -1, 1));
     }
 
     let closed = false;
@@ -274,7 +311,7 @@
       if (k === 'ArrowDown' || k === 'ArrowUp') move(k);
       else if ((k === 'Home' || k === 'End') && !e.shiftKey) edge(k); // Shift+Home / Shift+End select in the field
       else if (k === 'Enter') { if (!e.repeat) runActive(); } // a held Enter (from before the menu) doesn't run
-      else if (k === 'Escape' && field.input.value) { field.input.value = ''; applyFilter(); }
+      else if (k === 'Escape' && field.input.value) { field.input.value = ''; queryChanged(); }
       else if (k === 'Escape' || k === 'Tab') finish(null);
       else return false;
       return true;
@@ -315,9 +352,9 @@
     window.addEventListener('blur', onBlur);
     window.addEventListener('resize', onBlur);
     document.addEventListener('scroll', onScroll, true);
-    current = { root, close: finish };
+    current = { root, close: finish, update, setNote: (text) => { if (note) note.textContent = String(text || ''); } };
     if (search) {
-      field.input.addEventListener('input', applyFilter);
+      field.input.addEventListener('input', queryChanged);
       field.input.focus();
       applyFilter();
     } else {
@@ -326,5 +363,8 @@
     return root;
   }
 
-  window.Components.menu = { open, close, isOpen: () => !!current, place, filter, swallowNextClick };
+  const update = (items) => { if (current) current.update(items); };
+  const setNote = (text) => { if (current) current.setNote(text); };
+
+  window.Components.menu = { open, close, update, setNote, isOpen: () => !!current, place, filter, swallowNextClick };
 })();

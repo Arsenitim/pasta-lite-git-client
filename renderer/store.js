@@ -923,7 +923,7 @@
      * react (e.g. keep the commit message on failure); a toasted error has `toasted = true`, so callers
      * don't show it twice. The 'changed' event from main triggers the refresh, so callers don't
      * refresh themselves. Returns the op's value.
-     * opts.quiet: kinds (e.g. ['stale']) the caller handles itself — not toasted.
+     * opts.quiet: kinds (e.g. ['stale']) the caller handles itself — not toasted; true: none is.
      * opts.cancellable: run it with an op id (api.invokeCancellable) published as state.remoteOp
      * while it runs, so actions.cancelRemote() can abort it (it then rejects with kind 'aborted').
      */
@@ -937,7 +937,7 @@
         }
         return await invoke(op, ...args);
       } catch (e) {
-        if (!quiet.includes(e.kind)) {
+        if (quiet !== true && !quiet.includes(e.kind)) {
           e.toasted = true;
           toast(e);
         }

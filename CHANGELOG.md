@@ -8,6 +8,14 @@ minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- The branch switcher searches remote branches too: typing lists the matching remote branches no
+  local branch tracks (picking one checks out a local tracking branch). The first query also
+  fetches every remote in the background (at most once a minute per repository), so the list
+  includes branches pushed since the last fetch; the switcher notes the fetch while it runs and
+  when it fails, and picking a branch meanwhile cancels it.
+
 ## [0.3.0] - 2026-10-13
 
 ### Added

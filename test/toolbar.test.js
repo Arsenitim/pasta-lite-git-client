@@ -101,13 +101,15 @@ function fakeFlows(store, { mode = 'ff-if-possible' } = {}) {
 }
 
 function fakeMenu() {
-  const menu = { opened: [], closed: 0, open: false };
+  const menu = { opened: [], closed: 0, open: false, updates: [], notes: [] };
   return {
     menu,
     api: {
       open(anchor, items, opts) { menu.opened.push({ anchor, items, opts }); menu.open = true; },
       close() { menu.closed++; menu.open = false; },
       isOpen: () => menu.open,
+      update(items) { menu.updates.push(items); },
+      setNote(text) { menu.notes.push(text); },
     },
   };
 }
@@ -140,6 +142,18 @@ test('pullMenuModel / branchMenuModel', () => {
   assert.deepEqual(branchMenuModel(state({ refs: baseRefs({ local: [{ name: 'main', current: true }, { name: 'x\u202e' }] }) })),
     [{ name: 'main', label: 'main', current: true }, { name: 'x\u202e', label: 'x\\u{202E}', current: false }]);
   assert.deepEqual(branchMenuModel(state({ refs: null })), []);
+});
+
+test('remoteBranchMenuModel: remote branches in refs order, but those a local branch tracks', () => {
+  const { mod: { remoteBranchMenuModel } } = loadToolbar();
+  const remote = [
+    { name: 'origin/main', remote: 'origin', branch: 'main', oid: 'a' },
+    { name: 'origin/feat/y\u202e', remote: 'origin', branch: 'feat/y\u202e', oid: 'c' },
+    { name: 'up/main', remote: 'up', branch: 'main', oid: 'd' },
+  ];
+  assert.deepEqual(remoteBranchMenuModel(state({ refs: baseRefs({ remote }) })),
+    [{ name: 'origin/feat/y\u202e', label: 'origin/feat/y\\u{202E}' }, { name: 'up/main', label: 'up/main' }], 'main tracks origin/main');
+  assert.deepEqual(remoteBranchMenuModel(state({ refs: null })), []);
 });
 
 // ------------------------------------------------------------------ mounted: clicks -> PLFlows
@@ -221,8 +235,10 @@ test('mounted: branch switcher lists local branches (current checked) plus New b
   const { anchor, items, opts } = t.menu.menu.opened[0];
   assert.equal(anchor, t.btn('switcher'));
   assert.deepEqual(items.map((i) => (i.separator ? '---' : [i.label, !!i.checked])), [['main', true], ['feat/x', false], '---', ['New branch…', false]]);
-  // Search mode: the branches filter, New branch… is always shown
-  assert.deepEqual(opts.search, { label: 'Filter branches', placeholder: 'Filter branches', empty: 'No branches match' });
+  // Search mode: the branches filter, New branch… is always shown; with a remote, typing searches it too
+  const { onQuery, ...search } = opts.search;
+  assert.deepEqual(search, { label: 'Filter branches', placeholder: 'Search local and remote branches', empty: 'No branches match' });
+  assert.equal(typeof onQuery, 'function');
   assert.deepEqual(items.map((i) => !!i.pinned), [false, false, false, true]);
   assert.equal(t.btn('switcher').getAttribute('aria-haspopup'), 'dialog', 'the switcher: a search field over a listbox');
   assert.equal(t.btn('switcher').getAttribute('aria-expanded'), 'true');
@@ -477,12 +493,12 @@ test('mounted bare repository, real menu.js: every checkout off, the highlight f
   const type = (text) => { input.value = text; dom.dispatch(input, 'input'); };
   const activeId = () => input.getAttribute('aria-activedescendant');
   assert.equal(dom.document.activeElement, input);
-  assert.deepEqual(options.map((o) => [o.children.find((n) => n.classList.contains('pl-menu-label')).textContent, o.getAttribute('aria-disabled')]),
-    [['feat/x', 'true'], ['fix/y', 'true'], ['New branch…', null]]);
-  assert.equal(activeId(), options[2].id, 'no enabled branch: New branch… is highlighted');
+  assert.deepEqual(options.map((o) => [o.children.find((n) => n.classList.contains('pl-menu-label')).textContent, o.getAttribute('aria-disabled'), o.hidden]),
+    [['feat/x', 'true', false], ['fix/y', 'true', false], ['origin/main', 'true', true], ['New branch…', null, false]], 'the remote branch: only while searching');
+  assert.equal(activeId(), options[3].id, 'no enabled branch: New branch… is highlighted');
 
   type('fix');
-  assert.deepEqual(options.map((o) => o.hidden), [true, false, false], 'the pinned row stays');
+  assert.deepEqual(options.map((o) => o.hidden), [true, false, true, false], 'the pinned row stays');
   assert.equal(activeId(), null, 'only a disabled branch matches');
   assert.equal(empty.textContent, '');
   dom.key('Enter');
@@ -490,9 +506,11 @@ test('mounted bare repository, real menu.js: every checkout off, the highlight f
 
   type('zzz');
   assert.equal(empty.textContent, 'No branches match');
+  type('main');
+  assert.deepEqual(options.map((o) => o.hidden), [true, true, false, false], 'the remote branch matches (its checkout off too)');
   type('new');
   assert.equal(empty.textContent, '', 'New branch… matches');
-  assert.equal(activeId(), options[2].id);
+  assert.equal(activeId(), options[3].id);
   dom.key('Enter');
   assert.equal(t.win.Components.menu.isOpen(), false);
   assert.equal(t.btn('switcher').getAttribute('aria-expanded'), 'false');
@@ -571,5 +589,106 @@ test('mounted: main\'s fresh summary of the same repo (store.actions.updateRepoI
   assert.equal(chip.hidden, false, 'another root: ignored');
   t.store.actions.updateRepoInfo({ ...LINKED, linkedWorktree: null });
   assert.equal(chip.hidden, true, 'no longer a linked worktree');
+  t.dispose();
+});
+
+// ------------------------------------------------------------------ the switcher's remote branches and background fetch
+
+const REMOTE_Y = { name: 'origin/feat/y', remote: 'origin', branch: 'feat/y', oid: 'c' };
+
+/** mounted() with an untracked remote branch and a PLFlows.prefetch that resolves when the test says. */
+async function mountedRemote(o = {}) {
+  const t = await mounted(repoData({ refs: baseRefs({ remote: [...baseRefs().remote, REMOTE_Y] }), ...o }));
+  const pending = [];
+  t.flows.prefetch = (s) => {
+    assert.equal(s, t.store);
+    t.flows.calls.push(['prefetch']);
+    return new Promise((resolve) => pending.push(resolve));
+  };
+  const open = () => { t.btn('switcher').click(); return t.menu.menu.opened.at(-1); };
+  return { ...t, pending, open };
+}
+
+test('mounted: the switcher lists the untracked remote branches only while searching; a pick checks out a tracking branch', async () => {
+  const t = await mountedRemote();
+  const { items } = t.open();
+  assert.deepEqual(items.map((i) => (i.separator ? '---' : [i.label, !!i.searchOnly])),
+    [['main', false], ['feat/x', false], '---', ['origin/feat/y', true], '---', ['New branch…', false]], 'origin/main: main tracks it');
+  assert.equal(items[3].title, 'Check out origin/feat/y as a local tracking branch');
+  items[3].action();
+  await H.flush();
+  assert.deepEqual(t.flows.calls, [['checkout', { target: 'origin/feat/y', kind: 'remote' }]]);
+  t.dispose();
+});
+
+test('mounted: the first query fetches every remote in the background, once; the menu notes it and follows the new refs', async () => {
+  const t = await mountedRemote();
+  const { opts } = t.open();
+  opts.search.onQuery('');
+  opts.search.onQuery('  ');
+  assert.deepEqual(t.flows.calls, [], 'no query: no fetch');
+  opts.search.onQuery('f');
+  opts.search.onQuery('fe');
+  assert.deepEqual(t.flows.calls, [['prefetch']], 'once per open switcher');
+  assert.deepEqual(t.menu.menu.notes, ['Fetching remote branches…']);
+
+  // The fetch brings a remote branch: the open switcher shows it.
+  const z = { name: 'origin/feat/z', remote: 'origin', branch: 'feat/z', oid: 'd' };
+  t.store.set({ refs: baseRefs({ remote: [...baseRefs().remote, REMOTE_Y, z] }) });
+  assert.deepEqual(t.menu.menu.updates.at(-1).filter((i) => i.searchOnly).map((i) => i.label), ['origin/feat/y', 'origin/feat/z']);
+  t.pending[0](true);
+  await H.flush();
+  assert.deepEqual(t.menu.menu.notes, ['Fetching remote branches…', ''], 'done: the note goes');
+
+  // Reopened within PREFETCH_EVERY_MS: no second fetch. Closed: no more updates.
+  opts.onClose();
+  const updates = t.menu.menu.updates.length;
+  t.store.set({ refs: baseRefs() });
+  assert.equal(t.menu.menu.updates.length, updates, 'a closed switcher is left alone');
+  t.open().opts.search.onQuery('x');
+  assert.deepEqual(t.flows.calls, [['prefetch']]);
+  t.dispose();
+});
+
+test('mounted: a failed background fetch is noted in the switcher (no toast)', async () => {
+  const t = await mountedRemote();
+  t.open().opts.search.onQuery('f');
+  t.pending[0](false);
+  await H.flush();
+  assert.deepEqual(t.menu.menu.notes, ['Fetching remote branches…', "Couldn't fetch — remote branches as of the last fetch"]);
+  t.dispose();
+});
+
+test('mounted: no background fetch while busy or without remotes (and no remote wording then)', async () => {
+  const t = await mountedRemote();
+  const { opts: o } = t.open();
+  t.store.actions.setBusy(true); // another op started while the switcher is open
+  o.search.onQuery('f');
+  assert.deepEqual(t.flows.calls, [], 'busy');
+  t.dispose();
+
+  const n = await mountedRemote({ refs: baseRefs({ local: [{ name: 'main', oid: 'aaaaaaa1', current: true }], remote: [] }) });
+  const { opts } = n.open();
+  assert.deepEqual(opts.search, { label: 'Filter branches', placeholder: 'Filter branches', empty: 'No branches match' });
+  n.dispose();
+});
+
+test('mounted: a pick while the background fetch runs cancels it, then checks out once the repo is idle', async () => {
+  const t = await mountedRemote();
+  let cancels = 0;
+  t.store.actions.cancelRemote = async () => { cancels++; return true; };
+  const { items, opts } = t.open();
+  opts.search.onQuery('feat');
+  t.store.actions.setBusy(true); // main's 'busy' event for the fetch
+  items[1].action();
+  await H.flush();
+  assert.equal(cancels, 1);
+  assert.deepEqual(t.flows.calls, [['prefetch']], 'no checkout while the fetch runs');
+  t.pending[0](false); // cancelled
+  await H.flush();
+  assert.deepEqual(t.flows.calls, [['prefetch']], 'still busy');
+  t.store.actions.setBusy(false);
+  await H.flush();
+  assert.deepEqual(t.flows.calls, [['prefetch'], ['checkout', { target: 'feat/x', kind: 'local' }]]);
   t.dispose();
 });
