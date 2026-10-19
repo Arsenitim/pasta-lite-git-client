@@ -231,10 +231,13 @@ test('prefetch: every remote, cancellable; a failure is neither toasted nor a di
   finish({ tagConflicts: ['v1'] });
   assert.equal(await p, true);
   assert.equal(s.dialogs.length, 0);
-  for (const e of [err('auth', 'fatal: Authentication failed'), err('aborted', 'Operation was cancelled'), new Error('boom')]) {
+  for (const [e, warned] of [[err('auth', 'fatal: Authentication failed'), 1], [err('aborted', 'Operation was cancelled'), 0], [new Error('boom'), 1]]) {
     s = await setup({}, { fetch: () => { throw e; } });
+    const warns = [];
+    s.win.Components.util.log.warn = (...a) => warns.push(a);
     assert.equal(await s.F.prefetch(s.store), false, e.message);
     assert.deepEqual([s.dialogs.length, s.errors().length, s.notices().length], [0, 0, 0], e.message);
+    assert.equal(warns.length, warned, `${e.message}: a cancel is not a failure`);
   }
 });
 
@@ -1429,6 +1432,40 @@ test('menu search mode: onQuery follows the query (typing and Esc); update() kee
   C.menu.update([{ label: 'x' }]);
   C.menu.setNote('ignored');
   assert.equal(C.menu.isOpen(), false, 'no menu: nothing to update');
+});
+
+test('menu.update: the highlight follows the item key (same labels apart), the scroll position stays; a plain menu ignores it', () => {
+  const { dom, C } = domSetup();
+  const ran = [];
+  const items = (extra = []) => [
+    { label: 'origin/x', key: 'local:origin/x', action: () => ran.push('local') },
+    ...extra,
+    { label: 'origin/x', key: 'remote:origin/x', action: () => ran.push('remote') },
+  ];
+  const m = searchMenu(dom, C, items());
+  const listbox = m.root.findAll((n) => n.getAttribute('role') === 'listbox')[0];
+  m.type('origin');
+  dom.key('ArrowDown');
+  // A browser resets the scroll position when the rows are replaced; the fake DOM is told to.
+  const replace = listbox.replaceChildren.bind(listbox);
+  listbox.replaceChildren = (...kids) => { listbox.scrollTop = 0; replace(...kids); };
+  let scrolls = 0;
+  const had = Object.prototype.hasOwnProperty.call(dom.El.prototype, 'scrollIntoView');
+  const before = dom.El.prototype.scrollIntoView;
+  dom.El.prototype.scrollIntoView = () => { scrolls++; };
+  listbox.scrollTop = 120;
+  C.menu.update(items([{ label: 'origin/y', key: 'remote:origin/y' }]));
+  if (had) dom.El.prototype.scrollIntoView = before; else delete dom.El.prototype.scrollIntoView;
+  assert.equal(listbox.scrollTop, 120, 'the list stays where the user scrolled it');
+  assert.equal(scrolls, 0, 'the kept highlight is not scrolled to');
+  dom.key('Enter');
+  assert.deepEqual(ran, ['remote'], 'the remote row stayed highlighted, not its local namesake');
+
+  const plain = [{ label: 'a', action: () => ran.push('a') }];
+  const root = C.menu.open({ x: 0, y: 0 }, plain);
+  C.menu.update([{ label: 'b' }]);
+  assert.deepEqual(root.findAll((n) => n.getAttribute('role') === 'menuitem').map((n) => n.textContent), ['a'], 'search mode only');
+  C.menu.close();
 });
 
 // ------------------------------------------------------------------ rebase / merge in progress (docs/plans/rebase.md R1)

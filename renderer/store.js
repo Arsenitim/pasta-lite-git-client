@@ -68,6 +68,8 @@
 //   remoteOp     {op, opId} while a cancellable write (write(op, args, {cancellable: true}); the flows use it
 //                for fetch, pull, push, rebase, rebaseInteractive, rebaseContinue and rebaseSkip) runs, else
 //                null; actions.cancelRemote() cancels it
+//   fetchedAt    when a fetch or pull (FETCHING_OPS) of this repo last succeeded (Date.now()), null until one
+//                did (reset by loadRepo); the branch switcher's background fetch skips a recent one
 //   pullMode     the Pull button's default mode (flows-sync.js: PLFlows.pullMode / setPullMode), null until known;
 //                actions.setPullMode(mode) (app.js on a repo switch, PLFlows.setPullMode, which also stores it)
 //   undoError    message when undo state couldn't be read, else null
@@ -114,6 +116,8 @@
   // loaded history in one call, so no more than this many commits are ever loaded.
   const LOG_MAX = 10000;
   const WIP = 'WIP';
+  // Writes that bring the remotes' branches (state.fetchedAt).
+  const FETCHING_OPS = new Set(['fetch', 'pull']);
 
   const sameJSON = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
 
@@ -135,7 +139,7 @@
       repo: null, status: null, refs: null, refsBySha: new Map(), stashes: [],
       stashError: null, commits: [], hasMore: false, next: null, graph: { width: 0, rows: [] }, rows: [],
       selection: null, commitFiles: null, diff: null, undo: null, undoError: null, busy: false, loading: false,
-      loadError: null, remotes: null, remotesError: null, remoteOp: null, pullMode: null, continueDraft: null,
+      loadError: null, remotes: null, remotesError: null, remoteOp: null, fetchedAt: null, pullMode: null, continueDraft: null,
       rebaseEditor: null, worktrees: null, worktreeDirty: null, worktreeReveal: 0, centre: 'graph', imagePreview: null,
     };
     let loadSeq = 0; // guards against out-of-order loads (repo switch, rapid refreshes)
@@ -309,7 +313,7 @@
         repo, loading: true, status: null, refs: null, refsBySha: new Map(), stashes: [], stashError: null,
         commits: [], hasMore: false, next: null, rows: [], graph: { width: 0, rows: [] }, selection: null,
         commitFiles: null, diff: null, undo: null, undoError: null, loadError: null, remotes: null, remotesError: null,
-        remoteOp: null, continueDraft: null, rebaseEditor: null, worktrees: null, worktreeDirty: null, imagePreview: null,
+        remoteOp: null, fetchedAt: null, continueDraft: null, rebaseEditor: null, worktrees: null, worktreeDirty: null, imagePreview: null,
       });
       try {
         await refresh({ first: true });
@@ -926,16 +930,22 @@
      * opts.quiet: kinds (e.g. ['stale']) the caller handles itself — not toasted; true: none is.
      * opts.cancellable: run it with an op id (api.invokeCancellable) published as state.remoteOp
      * while it runs, so actions.cancelRemote() can abort it (it then rejects with kind 'aborted').
+     * A FETCHING_OPS op that succeeds sets state.fetchedAt (unless another repo loaded meanwhile).
      */
     async function write(op, args = [], { quiet = [], cancellable = false } = {}) {
       let mine = null;
+      const repo = state.repo;
       try {
+        let res;
         if (cancellable && typeof api.invokeCancellable === 'function' && typeof api.newOpId === 'function') {
           mine = { op, opId: api.newOpId() };
           set({ remoteOp: mine });
-          return await api.invokeCancellable(mine.opId, op, ...args).catch((e) => { throw toError(e); });
+          res = await api.invokeCancellable(mine.opId, op, ...args).catch((e) => { throw toError(e); });
+        } else {
+          res = await invoke(op, ...args);
         }
-        return await invoke(op, ...args);
+        if (FETCHING_OPS.has(op) && state.repo === repo) set({ fetchedAt: Date.now() });
+        return res;
       } catch (e) {
         if (quiet !== true && !quiet.includes(e.kind)) {
           e.toasted = true;

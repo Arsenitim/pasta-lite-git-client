@@ -12,10 +12,12 @@
 // The branch switcher is a Components.menu in search mode: typing filters the branches ("No branches
 // match" when none do), ↑ / ↓ and Enter pick one, Esc clears the query, then closes; New branch… is
 // pinned (always shown). The remote branches no local branch tracks show only while there is a query
-// (searchOnly; a pick checks out a local tracking branch). The first query starts a background fetch
-// of every remote (PLFlows.prefetch, at most once per PREFETCH_EVERY_MS per repository; not while busy
-// or without remotes); the menu notes it while it runs and when it fails, and follows the refs it
-// brings (Components.menu.update). A pick while it runs cancels it and waits for the repo to be idle.
+// (searchOnly; a pick checks out a local tracking branch). The first query of an open switcher starts
+// a background fetch of every remote (PLFlows.prefetch; not within PREFETCH_EVERY_MS of the repo's last
+// successful fetch or pull, state.fetchedAt; not while busy or without remotes); the menu notes it while
+// it runs and when it fails, and follows the refs it brings (Components.menu.update). A pick while it
+// runs (the current branch's row runs nothing) cancels it, waits for the repo to be idle, then runs,
+// unless another repository was opened meanwhile.
 // A bare repository (repo.bare): a "bare" pill, Pull runs as Fetch All (the other modes are
 // disabled in its menu), the switcher's checkouts are disabled (Components.actions.gateItems).
 // A linked worktree (repo.linkedWorktree, decided in main): a "worktree" chip with a tree icon
@@ -66,7 +68,7 @@
   const BRANCH_SEARCH = Object.freeze({ label: 'Filter branches', placeholder: 'Filter branches', empty: 'No branches match' });
   /** The same with remotes: typing searches the remote branches too. */
   const BRANCH_SEARCH_REMOTE = Object.freeze({ label: 'Filter branches', placeholder: 'Search local and remote branches', empty: 'No branches match' });
-  /** The switcher's background fetch runs at most this often per repository. */
+  /** The switcher's background fetch is skipped within this long of the repo's last successful fetch. */
   const PREFETCH_EVERY_MS = 60 * 1000;
   const PREFETCH_NOTES = Object.freeze({
     running: 'Fetching remote branches…',
@@ -313,42 +315,50 @@
         })));
       }
 
-      // The switcher's background fetch: repo root -> when it last started; the running one's promise.
-      const prefetchedAt = new Map();
+      // The switcher's background fetch: the running one's promise; whether this open switcher started one.
       let prefetching = null;
+      let prefetchTried = false;
 
       /** The switcher's items for state `s` (the checkouts go through gateItems: disabled in a bare repository). */
       function branchItems(s) {
         const m = model(s);
         const bare = isBare(s);
-        const checkout = (target, kind, label, title) => toMenuItems(gateItems([{ ...checkoutItem({ target, kind, label, title, state: s }), checked: false }], s), store)[0];
+        // A pick while the background fetch runs: cancel it, wait for the repo to be idle, then run.
+        const checkout = (target, kind, label, title) => {
+          const x = toMenuItems(gateItems([{ ...checkoutItem({ target, kind, label, title, state: s }), checked: false }], s), store)[0];
+          return { ...x, key: `${kind}:${target}`, action: () => afterPrefetch(x.action) };
+        };
         const items = branchMenuModel(s).map((b) => (b.current
-          ? { label: b.label, checked: true, title: bare ? `HEAD of the bare repository points at ${b.label}` : `${b.label} is checked out`, action: () => {} }
+          ? { label: b.label, key: `local:${b.name}`, checked: true, title: bare ? `HEAD of the bare repository points at ${b.label}` : `${b.label} is checked out`, action: () => {} }
           : checkout(b.name, 'local', b.label, `Check out ${b.label}`)));
         const remote = remoteBranchMenuModel(s).map((r) => ({ ...checkout(r.name, 'remote', r.label, `Check out ${r.label} as a local tracking branch`), searchOnly: true }));
         if (items.length && remote.length) items.push({ separator: true });
         items.push(...remote);
         if (items.length) items.push({ separator: true });
         // New branch… stays in the list whatever the query (pinned).
-        items.push(...toMenuItems([{ label: 'New branch…', disabled: m.branch.disabled, title: m.branch.title, flow: 'createBranch', args: [{}] }], store).map((x) => ({ ...x, pinned: true })));
-        // A pick while the background fetch runs: cancel it, wait for the repo to be idle, then run.
-        return items.map((x) => (x.action ? { ...x, action: () => afterPrefetch(x.action) } : x));
+        const [create] = toMenuItems([{ label: 'New branch…', disabled: m.branch.disabled, title: m.branch.title, flow: 'createBranch', args: [{}] }], store);
+        items.push({ ...create, key: 'new-branch', pinned: true, action: () => afterPrefetch(create.action) });
+        return items;
       }
 
+      /** Run a switcher pick: now, or once the background fetch is cancelled and the repo idle (same repo only). */
       function afterPrefetch(action) {
         if (!prefetching) return action();
+        const root = store.state.repo && store.state.repo.root;
         store.actions.cancelRemote();
-        return prefetching.then(() => whenIdle(store)).then(action);
+        return prefetching.then(() => whenIdle(store)).then(() => {
+          if (store.state.repo && store.state.repo.root === root) action();
+        });
       }
 
-      /** The first query of an open switcher: fetch every remote in the background (PREFETCH_EVERY_MS apart). */
+      /** The first query of an open switcher: fetch every remote in the background, unless one ran lately. */
       function prefetch(menu) {
         const s = store.state;
         const root = s.repo && s.repo.root;
         const f = flowsOf();
-        if (!root || prefetching || s.busy || !hasRemotes(s) || !f || typeof f.prefetch !== 'function') return;
-        if (Date.now() - (prefetchedAt.get(root) || 0) < PREFETCH_EVERY_MS) return;
-        prefetchedAt.set(root, Date.now());
+        if (prefetchTried || !root || prefetching || s.busy || !hasRemotes(s) || !f || typeof f.prefetch !== 'function') return;
+        if (s.fetchedAt && Date.now() - s.fetchedAt < PREFETCH_EVERY_MS) return;
+        prefetchTried = true;
         menu.setNote(PREFETCH_NOTES.running);
         const mine = runFlow({ flow: 'prefetch' }, store).then((ok) => {
           if (prefetching === mine) prefetching = null;
@@ -364,6 +374,7 @@
         if (!menu) return;
         const onQuery = (q) => { if (String(q).trim() && typeof menu.setNote === 'function') prefetch(menu); };
         const search = hasRemotes(store.state) ? { ...BRANCH_SEARCH_REMOTE, onQuery } : BRANCH_SEARCH;
+        prefetchTried = false;
         menu.open(branch.b, branchItems(store.state), {
           search,
           onClose: () => {

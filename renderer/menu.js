@@ -3,14 +3,15 @@
 //   Components.menu.open(anchor, items, opts?)
 //     anchor: {x, y} (client coordinates, e.g. a contextmenu event) or an Element (the menu opens
 //             below it, left-aligned, flipped/clamped to stay inside the window)
-//     items:  [{label, action: () => void, danger?, disabled?, title?, checked?, pinned?, searchOnly?} | {separator: true}]
+//     items:  [{label, action: () => void, danger?, disabled?, title?, checked?, pinned?, searchOnly?, key?} | {separator: true}]
+//             key: what identifies the item across update()s (default: its label)
 //     opts.search: {label, placeholder?, empty?, onQuery?(query)} adds a search field above the items
 //             (search mode); onQuery runs after each change of the query
 //     opts.onClose(): called once when the menu goes away (before a chosen item's action runs)
 //   Components.menu.filter(items, query) -> {shown, matched}: pure, what search mode shows
-//   Components.menu.update(items): replace the open menu's items (search mode keeps the query, and the
-//   highlighted item when one with its label is still shown); setNote(text): search mode's note under
-//   the field (e.g. "Fetching…"; '' hides it)
+//   Components.menu.update(items): replace the open search-mode menu's items (a plain menu: nothing); it
+//   keeps the query, the list's scroll position and the highlighted item when one with its key is still
+//   shown; setNote(text): search mode's note under the field (e.g. "Fetching…"; '' hides it)
 //   Components.menu.close(), Components.menu.isOpen()
 //   Components.menu.swallowNextClick(el): drop the next click on el (a press on a popup's own anchor
 //   closed it; the click that follows must not reopen it). Also used by the repository picker.
@@ -33,6 +34,7 @@
   const { el } = window.Components;
   let current = null; // {root, close}
   let seq = 0; // search mode: unique option ids (aria-activedescendant)
+  const keyOf = (it) => (it.key !== undefined ? it.key : it.label);
 
   /** Index of the next enabled item from `from` in direction `dir` (wrapping), or -1. Pure. */
   function nextIndex(items, from, dir) {
@@ -223,7 +225,10 @@
 
     // Search mode: the items the query shows (the others are null here, so nextIndex skips them).
     let view = list;
-    /** keep: an item to highlight again when it still shows and is enabled (update()). */
+    /**
+     * keep: an item to highlight again when one with its key still shows and is enabled (update()); it
+     * is not scrolled to then (the user may have scrolled the list away from it).
+     */
     function applyFilter({ keep = null } = {}) {
       const q = field.input.value;
       const { shown, matched } = filter(list, q);
@@ -243,8 +248,9 @@
         if (unpinned !== undefined) first = unpinned;
         else if (enabled.length) first = enabled[0];
       }
-      const again = keep ? list.findIndex((it, i) => on.has(i) && !it.separator && !it.disabled && it.label === keep.label) : -1;
-      focusAt(again >= 0 ? again : first, { scroll: true });
+      const again = keep ? list.findIndex((it, i) => on.has(i) && !it.separator && !it.disabled && keyOf(it) === keyOf(keep)) : -1;
+      if (again >= 0) focusAt(again);
+      else focusAt(first, { scroll: true });
     }
 
     /** The query changed (typing, Esc): filter, then tell opts.search.onQuery. */
@@ -254,16 +260,18 @@
       try { search.onQuery(field.input.value); } catch (e) { window.Components.util.log.error(e); }
     }
 
-    /** Menu.update: new items in place of the old ones (search mode: same query, same highlight if it stays). */
+    /** Menu.update (search mode): new items in place of the old ones; same query, scroll position and highlight if it stays. */
     function update(next) {
+      if (!search) return;
       const keep = active >= 0 ? list[active] : null;
+      const top = box.scrollTop;
       active = -1;
       list = itemsOf(next);
       hasCheck = list.some((x) => x.checked !== undefined);
       rows = buildRows();
       box.replaceChildren(...rows);
-      if (search) applyFilter({ keep });
-      else focusAt(nextIndex(list, -1, 1));
+      box.scrollTop = top;
+      applyFilter({ keep });
     }
 
     let closed = false;

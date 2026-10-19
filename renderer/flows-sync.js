@@ -44,7 +44,8 @@
       await store.actions.write('fetch', [{}], { quiet: true, cancellable: true });
       return true;
     } catch (e) {
-      C.util.log.warn('[flows] background fetch failed:', e && e.message);
+      // Cancelled (a pick in the branch switcher): nothing went wrong.
+      if (e.kind !== 'aborted') C.util.log.warn('[flows] background fetch failed:', e && e.message);
       return false;
     }
   }

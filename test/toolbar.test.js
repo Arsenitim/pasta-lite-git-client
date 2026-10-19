@@ -640,13 +640,39 @@ test('mounted: the first query fetches every remote in the background, once; the
   await H.flush();
   assert.deepEqual(t.menu.menu.notes, ['Fetching remote branches…', ''], 'done: the note goes');
 
-  // Reopened within PREFETCH_EVERY_MS: no second fetch. Closed: no more updates.
+  // Closed: no more updates.
   opts.onClose();
   const updates = t.menu.menu.updates.length;
   t.store.set({ refs: baseRefs() });
   assert.equal(t.menu.menu.updates.length, updates, 'a closed switcher is left alone');
-  t.open().opts.search.onQuery('x');
-  assert.deepEqual(t.flows.calls, [['prefetch']]);
+  t.dispose();
+});
+
+test('mounted: the background fetch is skipped within a minute of the repo\'s last successful fetch or pull (state.fetchedAt)', async (tt) => {
+  let now = 1_000_000;
+  tt.mock.method(Date, 'now', () => now);
+  const t = await mountedRemote();
+  t.store.set({ fetchedAt: now - 59_999 }); // e.g. Fetch All a moment ago
+  t.open().opts.search.onQuery('f');
+  assert.deepEqual(t.flows.calls, [], 'fetched lately');
+  t.menu.menu.opened.at(-1).opts.onClose();
+  now += 1;
+  t.open().opts.search.onQuery('f');
+  assert.deepEqual(t.flows.calls, [['prefetch']], 'a minute later');
+  t.dispose();
+});
+
+test('mounted: a failed or cancelled background fetch is retried at the next open switcher, not at the next keystroke', async () => {
+  const t = await mountedRemote();
+  const first = t.open().opts;
+  first.search.onQuery('f');
+  t.pending[0](false);
+  await H.flush();
+  first.search.onQuery('fe');
+  assert.deepEqual(t.flows.calls, [['prefetch']], 'once per open switcher');
+  first.onClose();
+  t.open().opts.search.onQuery('f');
+  assert.deepEqual(t.flows.calls, [['prefetch'], ['prefetch']], 'nothing fetched (fetchedAt unset): tried again');
   t.dispose();
 });
 
@@ -690,5 +716,33 @@ test('mounted: a pick while the background fetch runs cancels it, then checks ou
   t.store.actions.setBusy(false);
   await H.flush();
   assert.deepEqual(t.flows.calls, [['prefetch'], ['checkout', { target: 'feat/x', kind: 'local' }]]);
+  t.dispose();
+});
+
+test('mounted: a pick waiting on the background fetch is dropped when another repository opened meanwhile', async () => {
+  const t = await mountedRemote();
+  t.store.actions.cancelRemote = async () => true;
+  const { items, opts } = t.open();
+  opts.search.onQuery('main');
+  t.store.actions.setBusy(true);
+  items[1].action();
+  t.store.set({ repo: { root: '/other', name: 'other' } }); // ⌘P works while busy
+  t.pending[0](false);
+  t.store.actions.setBusy(false);
+  await H.flush();
+  assert.deepEqual(t.flows.calls, [['prefetch']], 'no checkout in the other repository');
+  t.dispose();
+});
+
+test('mounted: the current branch\'s row leaves the background fetch running; every row has a stable key', async () => {
+  const t = await mountedRemote();
+  let cancels = 0;
+  t.store.actions.cancelRemote = async () => { cancels++; return true; };
+  const { items, opts } = t.open();
+  assert.deepEqual(items.map((i) => i.key), ['local:main', 'local:feat/x', undefined, 'remote:origin/feat/y', undefined, 'new-branch']);
+  opts.search.onQuery('main');
+  items[0].action();
+  await H.flush();
+  assert.equal(cancels, 0);
   t.dispose();
 });
