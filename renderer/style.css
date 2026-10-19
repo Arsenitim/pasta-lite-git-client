@@ -380,3 +380,5 @@ body.pn-resizing, body.pn-resizing * { cursor: col-resize !important; user-selec
 .pl-menu-empty { flex: none; padding: 5px 10px; color: var(--text-3); white-space: nowrap; }
 /* the status stays in the accessibility tree while nothing needs saying: empty, it takes no room */
 .pl-menu-empty:empty { padding: 0; }
+.pl-menu-note { flex: none; padding: 0 10px 4px; color: var(--text-3); font-size: 11.5px; white-space: nowrap; }
+.pl-menu-note:empty { padding: 0; }

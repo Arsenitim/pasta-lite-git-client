@@ -1014,6 +1014,39 @@ test('write: returns the value; errors are toasted (toasted = true) and re-throw
   assert.equal(toasts.length, 2);
 });
 
+test('write: quiet true toasts no error; a fetch or pull that succeeds sets fetchedAt (not after another repo loaded)', async (t) => {
+  t.mock.method(Date, 'now', () => 42);
+  const { api, store } = await loadedStore(repoData({ commits: chain(['a']) }));
+  const toasts = [];
+  store.setToast((e) => toasts.push(e));
+  assert.equal(store.state.fetchedAt, null);
+
+  const silent = store.actions.write('fetch', [{}], { quiet: true });
+  api.take('fetch').reject({ message: 'offline', kind: 'network' });
+  await assert.rejects(silent, (e) => e.kind === 'network' && !e.toasted);
+  assert.deepEqual([toasts.length, store.state.fetchedAt], [0, null], 'a failed fetch: no toast, no fetchedAt');
+
+  const staged = store.actions.write('stage', [['a.txt']]);
+  api.take('stage').resolve({});
+  await staged;
+  assert.equal(store.state.fetchedAt, null, 'not a fetching op');
+
+  for (const op of ['fetch', 'pull']) {
+    store.set({ fetchedAt: null });
+    const w = store.actions.write(op, [{}]);
+    api.take(op).resolve({});
+    await w;
+    assert.equal(store.state.fetchedAt, 42, op);
+  }
+
+  store.set({ fetchedAt: null });
+  const late = store.actions.write('fetch', [{}]);
+  store.set({ repo: { root: '/other', name: 'other' } });
+  api.take('fetch').resolve({});
+  await late;
+  assert.equal(store.state.fetchedAt, null, 'the fetch was of the previous repo');
+});
+
 test('loadMore backs off for 5 s after a failure, then retries', async (t) => {
   let now = 1_000_000;
   t.mock.method(Date, 'now', () => now);

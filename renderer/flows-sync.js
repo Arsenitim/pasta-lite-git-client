@@ -2,6 +2,8 @@
 // PLFlows for talking to remotes (plain script; loads after flows-kit.js and adds its flows to
 // window.PLFlows). Contract: flows-kit.js.
 //   fetch(store, {remote}?)     default: every remote
+//   prefetch(store)             fetch every remote in the background (the branch switcher's search):
+//                               no toast, dialog or notice; resolves false when it failed or was cancelled
 //   pull(store, mode?)          mode: 'fetch' | 'ff-if-possible' | 'ff-only' | 'rebase'; default pullMode(store);
 //                               kept stashes and partial restores are explained by reportOutcome / keptStashText
 //   pullMode(store) -> string   the per-repo default (sync; initially 'ff-if-possible'; always 'fetch' in a bare
@@ -33,6 +35,17 @@
       if (await connectAlert(store, e, { op: 'fetch' })) return false;
       if (e.kind === 'aborted') store.actions.notify('Fetch cancelled');
       else report(store, e);
+      return false;
+    }
+  }
+
+  async function prefetchFlow(store) {
+    try {
+      await store.actions.write('fetch', [{}], { quiet: true, cancellable: true });
+      return true;
+    } catch (e) {
+      // Cancelled (a pick in the branch switcher): nothing went wrong.
+      if (e.kind !== 'aborted') C.util.log.warn('[flows] background fetch failed:', e && e.message);
       return false;
     }
   }
@@ -321,6 +334,7 @@
   Object.assign(window.PLFlows, { pullMode, setPullMode, PULL_MODES });
   K.register({
     fetch: fetchInner,
+    prefetch: prefetchFlow,
     pull: (store, mode) => pullInner(store, PULL_MODES.includes(mode) ? mode : pullMode(store)),
     push: pushFlow,
     setUpstream: setUpstreamFlow,
