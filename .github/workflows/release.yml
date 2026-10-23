@@ -85,8 +85,11 @@ jobs:
           # fixes ship as patch releases.
           check-latest: true
 
-      # Keep the Electron binary download: the build copies its LICENSE files (build.extraResources).
       - run: npm ci
+
+      # npm ci doesn't download Electron 44's binary, whose folder has the license files the build
+      # copies (build.extraResources; scripts/check-extra-resources.js stops the build without them).
+      - run: npx install-electron
 
       # The check job has made sure that, on a tag, package.json's version is the tag's.
       - run: npx electron-builder --win --publish never

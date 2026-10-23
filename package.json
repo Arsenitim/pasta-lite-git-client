@@ -30,10 +30,10 @@
     "changelog:check": "node scripts/changelog-pr-check.js",
     "changelog:section": "node scripts/changelog-section.js",
     "release:check": "node scripts/release-check.js",
-    "dist:mac": "electron-builder --mac",
-    "dist:mac:unsigned": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac -c.mac.identity=null -c.mac.forceCodeSigning=false -c.mac.notarize=false",
+    "dist:mac": "install-electron && electron-builder --mac",
+    "dist:mac:unsigned": "install-electron && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac -c.mac.identity=null -c.mac.forceCodeSigning=false -c.mac.notarize=false",
     "verify:mac": "sh scripts/verify-mac-build.sh",
-    "dist:win": "electron-builder --win",
+    "dist:win": "install-electron && electron-builder --win",
     "dist:linux": "install-electron && electron-builder --linux"
   },
   "engines": {
@@ -85,6 +85,7 @@
     ],
     "npmRebuild": false,
     "publish": null,
+    "beforePack": "scripts/check-extra-resources.js",
     "afterPack": "scripts/mac-adhoc-sign.js",
     "electronFuses": {
       "runAsNode": false,

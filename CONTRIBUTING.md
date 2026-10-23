@@ -105,6 +105,10 @@ Intel (`x64`). Separate DMGs keep each download at about half the size of a univ
 the runtime files go into the app (`main.js`, `main/`, `src/`, `renderer/`, the preloads and the
 icon), plus our `LICENSE` and `NOTICE` and Electron's `LICENSE.electron.txt` and
 `LICENSES.chromium.html` in `Contents/Resources`. The output goes to `dist/`, which is git-ignored.
+Electron's two files come from `node_modules/electron/dist`, which `npm ci` doesn't create
+(Electron 44 downloads its binary on first use): the `dist:*` scripts run `install-electron`
+first, and a `beforePack` hook (`scripts/check-extra-resources.js`) stops any build, on every
+platform, that is missing a `build.extraResources` file.
 
 ### Local build (unsigned)
 
