@@ -231,7 +231,10 @@ npm run dist:linux
 The initial targets are x64 AppImage and `.deb`; neither bundles git. The `.deb` declares
 `git (>= 1:2.51.0)` (Debian/Ubuntu's git version has epoch `1:`), alongside Electron's desktop
 libraries. AppImage users must install a suitable git themselves. Both packages include the
-license notices. The macOS signing/notarization hooks skip Linux artifacts.
+license notices. Linux packaging converts `assets/icon.icns` to standard PNG sizes for the
+hicolor icon theme. Do not point `linux.icon` at the 1024px `assets/icon.png`: electron-builder
+passes a PNG through at its original size, and hicolor does not list a 1024x1024 directory, so
+the launcher and dock cannot find it. The macOS signing/notarization hooks skip Linux artifacts.
 `dist:linux` explicitly installs development Electron before packaging so its license files are
 present even on a fresh checkout (Electron 44 otherwise downloads the binary on first use).
 

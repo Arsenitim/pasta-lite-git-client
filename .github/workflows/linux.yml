@@ -27,7 +27,7 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:git-core/ppa
           sudo apt-get update
-          sudo apt-get install -y git libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 libatspi2.0-0 libsecret-1-0 libasound2 xvfb
+          sudo apt-get install -y git libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 libatspi2.0-0 libsecret-1-0 libasound2 xvfb python3-gi gir1.2-gtk-3.0
           git --version
 
       # dist:linux installs development Electron too: packaging includes its license files.
@@ -38,6 +38,29 @@ jobs:
         run: |
           dpkg-deb --info dist/*.deb
           dpkg-deb --field dist/*.deb Depends | grep -F 'git (>= 1:2.51.0)'
+
+      # Resolve the installed icon through GTK, not just by checking that a PNG exists:
+      # hicolor ignores sizes missing from index.theme (including a lone 1024px PNG).
+      - name: Check launcher icon lookup
+        run: |
+          dpkg-deb --extract dist/*.deb "$RUNNER_TEMP/pasta-deb"
+          /usr/bin/python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import gi
+          gi.require_version('Gtk', '3.0')
+          from gi.repository import Gtk
+          icons = Path(os.environ['RUNNER_TEMP']) / 'pasta-deb/usr/share/icons'
+          theme = Gtk.IconTheme.new()
+          theme.set_search_path([str(icons), '/usr/share/icons'])
+          theme.set_custom_theme('hicolor')
+          for size in (16, 32, 48, 64, 128, 256, 512):
+              icon = theme.lookup_icon('pasta-lite', size, 0)
+              assert icon, f'Launcher icon missing at size {size}'
+              resolved = Path(icon.get_filename())
+              assert icons in resolved.parents, f'Unexpected icon: {resolved}'
+              print(f'{size}px: {resolved}')
+          PY
 
       # Development Electron enables the smoke harness while loading the packaged application.
       # It uses disposable user data, and the demo never touches a user's repositories.

@@ -154,7 +154,7 @@
         }
       ],
       "category": "Development",
-      "icon": "assets/icon.png",
+      "icon": "assets/icon.icns",
       "executableName": "pasta-lite",
       "syncDesktopName": true,
       "artifactName": "Pasta-Lite-${version}-linux-${arch}.${ext}",
