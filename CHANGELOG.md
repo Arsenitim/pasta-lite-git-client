@@ -19,6 +19,12 @@ minor versions may contain breaking changes.
   pull), so the list includes branches pushed since then; the switcher notes the fetch while it
   runs and when it fails, and picking a branch meanwhile cancels it.
 
+### Security
+
+- Electron 44.9.3 (from 44.4.5): fixes pointer lock permission requests being attributed to the
+  wrong frame (GHSA-x562-297c-g43g) and stops trusting the compromised eMudhra intermediate
+  certificates (GHSA-jr5w-w6x2-84p9).
+
 ## [0.3.0] - 2026-10-13
 
 ### Added

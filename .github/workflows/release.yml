@@ -33,6 +33,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          # The newest patch release of that major, not the runner image's cached one: Node security
+          # fixes ship as patch releases.
+          check-latest: true
 
       # The build's files are named after package.json's version: on a tag, it must match the tag
       # (package-lock.json's too), and CHANGELOG.md must have the tag's section for the notes.
@@ -78,6 +81,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          # The newest patch release of that major, not the runner image's cached one: Node security
+          # fixes ship as patch releases.
+          check-latest: true
 
       # Keep the Electron binary download: the build copies its LICENSE files (build.extraResources).
       - run: npm ci
