@@ -27,7 +27,7 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:git-core/ppa
           sudo apt-get update
-          sudo apt-get install -y git libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 libatspi2.0-0 libsecret-1-0 libasound2 xvfb python3-gi gir1.2-gtk-3.0
+          sudo apt-get install -y git libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 libatspi2.0-0 libsecret-1-0 libasound2 libgbm1 xvfb python3-gi gir1.2-gtk-3.0
           git --version
 
       # dist:linux installs development Electron too: packaging includes its license files.

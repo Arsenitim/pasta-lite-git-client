@@ -163,6 +163,8 @@
     "deb": {
       "depends": [
         "git (>= 1:2.51.0)",
+        "libasound2",
+        "libgbm1",
         "libgtk-3-0",
         "libnotify4",
         "libnss3",
