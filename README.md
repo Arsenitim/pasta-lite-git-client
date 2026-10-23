@@ -76,9 +76,9 @@ your system `git`, so your existing SSH keys, credential helper and git config j
 ## Requirements
 
 - **git 2.51 or newer**, installed on your system. Pasta Lite checks this at startup and won't run with an older git (undo depends on `git reflog write`). The git that ships with macOS is usually older, so install one with [Homebrew](https://brew.sh) (`brew install git`). The app finds Homebrew's git even when it's started from the Finder or the Dock. On Windows, install [Git for Windows](https://git-scm.com/download/win) (or run `winget install --id Git.Git -e`). The app uses the git on your PATH, or else finds Git for Windows in its usual install folder (under Program Files, or `AppData\Local\Programs` for a per-user install).
-- **macOS 13 or newer**, or **Windows 10 or 11** (x64 or arm64), for the downloadable app.
+- **macOS 13 or newer**, or **Windows 10 or 11** (x64 or arm64). Linux builds are available for x64 (alpha).
 - **Node.js 22.12 or newer**, only to run it from source (Electron's installer needs it).
-- **Platforms:** developed and tested on macOS. Windows support is alpha: the app works in testing on Windows 11 and CI runs the test suite on Windows too (skipping a few tests that can't run there), but it has seen far less real use than on macOS, so expect rough edges and please [report what you find](https://github.com/SilverClash/pasta-lite-git-client/issues). Linux is supported in the code but not yet tested, and there are no builds for it.
+- **Platforms:** developed and tested on macOS. Windows support is alpha: the app works in testing on Windows 11 and CI runs the test suite on Windows too (skipping a few tests that can't run there), but it has seen far less real use than on macOS, so expect rough edges and please [report what you find](https://github.com/SilverClash/pasta-lite-git-client/issues). Linux support is alpha too: CI runs the tests on Ubuntu and smoke-tests the packaged code in Electron, but desktop environments and distributions need more hands-on testing.
 
 ## Download
 
@@ -113,6 +113,44 @@ The Windows builds are not code-signed yet, so SmartScreen shows "Windows protec
 ```powershell
 Get-FileHash .\Pasta-Lite-<version>-x64-setup.exe -Algorithm SHA256
 ```
+
+### Linux (alpha)
+
+Download the x64 AppImage or Debian/Ubuntu package from the [Releases page](https://github.com/SilverClash/pasta-lite-git-client/releases):
+
+| Format | File |
+| --- | --- |
+| AppImage | `Pasta-Lite-<version>-linux-x86_64.AppImage` |
+| Debian / Ubuntu | `Pasta-Lite-<version>-linux-amd64.deb` |
+
+Both require **system git 2.51 or newer** (`git --version`). Git and Node.js are not bundled as
+separate command-line tools; Electron includes the runtime the app needs. The `.deb` declares a
+versioned git dependency: if your distribution has an older git, install a newer git package from
+a source you trust before installing Pasta Lite. An AppImage does not install git for you.
+
+For the AppImage:
+
+```sh
+chmod +x Pasta-Lite-<version>-linux-x86_64.AppImage
+./Pasta-Lite-<version>-linux-x86_64.AppImage
+```
+
+AppImages need FUSE 2 support. Without it, use the AppImage runtime's
+`--appimage-extract-and-run` option, or install the `.deb` instead. On Ubuntu/Debian:
+
+```sh
+sudo apt install ./Pasta-Lite-<version>-linux-amd64.deb
+```
+
+On Ubuntu 24.04 and newer, prefer the `.deb`: its installation configures the Chromium sandbox
+and an AppArmor profile. An AppImage or development binary may be blocked by the system's
+user-namespace restrictions. Keep sandboxing enabled for normal use.
+
+The `.deb` adds a desktop launcher and the `pasta-lite` command. Both formats use your existing
+Git configuration, SSH agent and credential helper. Git authentication must already work without
+interactive prompts. Linux builds are alpha and unsigned; compare the file with
+`Pasta-Lite-<version>-SHA256SUMS-linux.txt` from the release (`sha256sum <file>`).
+HEIC, TIFF and PSD previews remain macOS-only.
 
 ## Getting started
 
@@ -157,7 +195,7 @@ It also creates `/tmp/pasta-demo.origin.git` next to it. The screenshots above w
 - No commit search, file history or blame.
 - Dark theme only.
 - HEIC, TIFF and PSD images preview only on macOS, as the system's thumbnail (at most about 2,048 pixels wide), not at full resolution. On Windows and Linux they say "preview not supported".
-- Downloadable builds for macOS and, in alpha, Windows. None for Linux yet.
+- Windows and Linux downloadable builds are alpha; Linux packages currently target x64 only.
 
 ## Development
 

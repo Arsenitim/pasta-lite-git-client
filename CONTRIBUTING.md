@@ -2,7 +2,7 @@
 
 Thanks for your interest in Pasta Lite. It is a small, alpha-stage Electron git client. It has no
 framework and no bundler: you develop it from source, and releases are packaged as macOS DMGs
-and, in alpha, Windows installers.
+and, in alpha, Windows installers and Linux packages.
 Bug reports, fixes and focused features are welcome.
 
 Please follow the [Code of Conduct](CODE_OF_CONDUCT.md). To report a security problem, do not
@@ -215,6 +215,39 @@ unsigned build needs no Wine. The macOS hooks (`scripts/mac-adhoc-sign.js`,
 `scripts/mac-notarize-dmg.js`) do nothing for a Windows build, and the Electron fuses and the
 asar integrity check apply to the Windows executable as well.
 
+## Building the Linux app
+
+Build on Linux with Node.js 22.12 or newer (22.13 for lint), system git 2.51 or newer,
+and the GTK/NSS libraries Electron needs:
+
+```sh
+npm ci
+npm run dist:linux
+# dist/Pasta-Lite-<version>-linux-x86_64.AppImage
+# dist/Pasta-Lite-<version>-linux-amd64.deb
+# dist/linux-unpacked/
+```
+
+The initial targets are x64 AppImage and `.deb`; neither bundles git. The `.deb` declares
+`git (>= 1:2.51.0)` (Debian/Ubuntu's git version has epoch `1:`), alongside Electron's desktop
+libraries. AppImage users must install a suitable git themselves. Both packages include the
+license notices. The macOS signing/notarization hooks skip Linux artifacts.
+`dist:linux` explicitly installs development Electron before packaging so its license files are
+present even on a fresh checkout (Electron 44 otherwise downloads the binary on first use).
+
+`.github/workflows/linux.yml` builds both formats on Ubuntu 22.04 for PRs, manual runs, and the
+release workflow. It checks the Debian dependency, then uses development Electron to load
+`dist/linux-unpacked/resources/app.asar` with the existing smoke harness under Xvfb. It captures
+the start screen and a demo repository, including an external file-change watcher check, without
+disabling Chromium's sandbox. The `linux-smoke` artifact holds the screenshots. The `linux`
+artifact holds the packages and `Pasta-Lite-<version>-SHA256SUMS-linux.txt`.
+
+Before calling a Linux build ready for a desktop environment, test the actual installed package
+or AppImage there: launch from the desktop and terminal, open a repository, stage/commit/undo,
+fetch/push with your configured authentication, open a terminal and reveal a file, and confirm
+external changes refresh the view. Check Wayland and X11 separately. The automated smoke checks
+cover renderer startup and file watching, not every desktop integration or authentication setup.
+
 ## Publishing a release
 
 The release notes are the release's section of `CHANGELOG.md`, which PRs have filled in as they
@@ -243,8 +276,10 @@ were merged ([Changelog](#changelog)): nothing is written from scratch at releas
    `npx electron-builder --win --publish never`, and writes
    `Pasta-Lite-<version>-SHA256SUMS-windows.txt` for them (`<hash>  <file>` lines, as
    `sha256sum -c` reads them), since they aren't signed. It keeps these files as a workflow
-   artifact named `windows`. Its `publish` job then attaches them to the GitHub release for the
-   tag, which it creates as a draft prerelease with those notes (and a note on the Windows builds)
+   artifact named `windows`. The reusable `linux` job builds an x64 AppImage and `.deb`,
+   smoke-tests their packaged code and keeps them and Linux checksums as the `linux` artifact.
+   Its `publish` job then attaches both platforms' packages to the GitHub release for the
+   tag, which it creates as a draft prerelease with those notes (and a note on the Windows and Linux builds)
    if there's none yet. The notes end in a hidden `<!-- notes from CHANGELOG.md -->` line: a later
    run (after a fix to `CHANGELOG.md`, with the tag moved and pushed again) replaces the notes of a
    draft that has that line, or no notes at all. Notes without the line are yours: the job leaves
@@ -263,9 +298,9 @@ were merged ([Changelog](#changelog)): nothing is written from scratch at releas
 
    Wait for the workflow to create the draft first, or create the release yourself
    (`gh release create v<version> --draft --prerelease`): the workflow then attaches its files to
-   that one. Don't publish the release before the workflow has attached the Windows files.
+   that one. Don't publish the release before the workflow has attached the Windows and Linux files.
 5. Read the notes over and publish the release. It should carry two DMGs, two `-setup.exe`
-   installers, the zip and the SHA256SUMS file. A fix to the notes belongs in `CHANGELOG.md` too;
+   installers, the Windows zip, the Linux AppImage and `.deb`, and both SHA256SUMS files. A fix to the notes belongs in `CHANGELOG.md` too;
    if you edit the draft's notes by hand instead, delete the marker line so a re-run keeps them.
 
 ## Architecture
