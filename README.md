@@ -76,7 +76,7 @@ your system `git`, so your existing SSH keys, credential helper and git config j
 ## Requirements
 
 - **git 2.51 or newer**, installed on your system. Pasta Lite checks this at startup and won't run with an older git (undo depends on `git reflog write`). The git that ships with macOS is usually older, so install one with [Homebrew](https://brew.sh) (`brew install git`). The app finds Homebrew's git even when it's started from the Finder or the Dock. On Windows, install [Git for Windows](https://git-scm.com/download/win) (or run `winget install --id Git.Git -e`). The app uses the git on your PATH, or else finds Git for Windows in its usual install folder (under Program Files, or `AppData\Local\Programs` for a per-user install).
-- **macOS 13 or newer**, or **Windows 10 or 11** (x64 or arm64). Linux builds are available for x64 (alpha).
+- **macOS 13 or newer**, or **Windows 10 or 11** (x64 or arm64). Linux builds (alpha) are for x64: Ubuntu 22.04 or newer, or another distribution with glibc 2.35 or newer.
 - **Node.js 22 (22.23.4+), 24 (24.22.1+) or 26 (26.12.1+)** (the October 2026 security releases), only to run it from source.
 - **Platforms:** developed and tested on macOS. Windows support is alpha: the app works in testing on Windows 11 and CI runs the test suite on Windows too (skipping a few tests that can't run there), but it has seen far less real use than on macOS, so expect rough edges and please [report what you find](https://github.com/SilverClash/pasta-lite-git-client/issues). Linux support is alpha too: CI runs the tests on Ubuntu and smoke-tests the packaged code in Electron, but desktop environments and distributions need more hands-on testing.
 
@@ -179,9 +179,16 @@ quit the app and replace the file with the newer download.
 
 Linux builds are alpha and unsigned. To check a download, run `sha256sum` on the file and compare
 its hash with the matching entry in `Pasta-Lite-<version>-SHA256SUMS-linux.txt` from the same
-release. If the app fails to open, launch it from a terminal and include its output, distribution
-and `git --version` when [reporting an issue](https://github.com/SilverClash/pasta-lite-git-client/issues).
-HEIC, TIFF and PSD previews remain macOS-only.
+release. The release workflow also records signed build provenance for both packages: with the
+[GitHub CLI](https://cli.github.com), this confirms the file was built by this repository's
+release workflow, not just that it matches a checksum on the same page:
+
+```sh
+gh attestation verify Pasta-Lite-<version>-linux-amd64.deb --repo SilverClash/pasta-lite-git-client
+```
+
+If the app fails to open, launch it from a terminal and include its output, distribution and
+`git --version` when [reporting an issue](https://github.com/SilverClash/pasta-lite-git-client/issues).
 
 ## Getting started
 

@@ -221,8 +221,8 @@ asar integrity check apply to the Windows executable as well.
 
 ## Building the Linux app
 
-Build on Linux with Node.js 22.12 or newer (22.13 for lint), system git 2.51 or newer,
-and the GTK/NSS libraries Electron needs:
+Build on Linux with a supported Node.js (see [Requirements](#requirements)), system git 2.51 or
+newer, and the GTK/NSS libraries Electron needs:
 
 ```sh
 npm ci
@@ -238,16 +238,21 @@ libraries. AppImage users must install a suitable git themselves. Both packages 
 license notices. Linux packaging converts `assets/icon.icns` to standard PNG sizes for the
 hicolor icon theme. Do not point `linux.icon` at the 1024px `assets/icon.png`: electron-builder
 passes a PNG through at its original size, and hicolor does not list a 1024x1024 directory, so
-the launcher and dock cannot find it. The macOS signing/notarization hooks skip Linux artifacts.
-`dist:linux` explicitly installs development Electron before packaging so its license files are
-present even on a fresh checkout (Electron 44 otherwise downloads the binary on first use).
+the launcher and dock cannot find it. The `.desktop` entry passes local paths (`%F`), so a folder
+dropped on the launcher opens as a repository. The macOS signing/notarization hooks skip Linux
+artifacts.
 
-`.github/workflows/linux.yml` builds both formats on Ubuntu 22.04 for PRs, manual runs, and the
-release workflow. It checks the Debian dependency, then uses development Electron to load
-`dist/linux-unpacked/resources/app.asar` with the existing smoke harness under Xvfb. It captures
-the start screen and a demo repository, including an external file-change watcher check, without
-disabling Chromium's sandbox. The `linux-smoke` artifact holds the screenshots. The `linux`
-artifact holds the packages and `Pasta-Lite-<version>-SHA256SUMS-linux.txt`.
+`.github/workflows/linux.yml` runs on Ubuntu 22.04 for PRs, manual runs, and the release
+workflow. Its `package` job builds both formats with nothing but `npm ci` and electron-builder,
+checks the Debian dependency and writes `Pasta-Lite-<version>-SHA256SUMS-linux.txt`; the `linux`
+artifact holds the packages and that file. Its `smoke` job adds the git PPA and Xvfb, checks the
+icon lookup through GTK, installs the `.deb` with `apt` (its dependencies and install script),
+and starts the installed `pasta-lite` with a fresh home: it must still be running after 20
+seconds and have found git. It then loads the installed `app.asar` in development Electron with
+the smoke harness, capturing the start screen and a demo repository, including an external
+file-change watcher check, without disabling Chromium's sandbox. The `linux-smoke` artifact holds
+the screenshots. On a tag, its `attest` job records signed build provenance for the AppImage and
+the `.deb` (`gh attestation verify`).
 
 Before calling a Linux build ready for a desktop environment, test the actual installed package
 or AppImage there: launch from the desktop and terminal, open a repository, stage/commit/undo,
@@ -284,12 +289,13 @@ were merged ([Changelog](#changelog)): nothing is written from scratch at releas
    `Pasta-Lite-<version>-SHA256SUMS-windows.txt` for them (`<hash>  <file>` lines, as
    `sha256sum -c` reads them), since they aren't signed. It keeps these files as a workflow
    artifact named `windows`. The reusable `linux` job builds an x64 AppImage and `.deb`,
-   smoke-tests their packaged code and keeps them and Linux checksums as the `linux` artifact.
-   Its `publish` job then attaches both platforms' packages to the GitHub release for the
-   tag, which it creates as a draft prerelease with those notes (and a note on the Windows and Linux builds)
-   if there's none yet. The notes end in a hidden `<!-- notes from CHANGELOG.md -->` line: a later
-   run (after a fix to `CHANGELOG.md`, with the tag moved and pushed again) replaces the notes of a
-   draft that has that line, or no notes at all. Notes without the line are yours: the job leaves
+   installs and smoke-tests them, attests their provenance and keeps them and Linux checksums as
+   the `linux` artifact. Its `publish` job then attaches both platforms' packages to the GitHub
+   release for the tag, which it creates as a draft prerelease with those notes (and a note on the
+   Windows and Linux builds) if there's none yet. The notes end in a hidden
+   `<!-- notes from CHANGELOG.md -->` line: a later run (after a fix to `CHANGELOG.md`, with the
+   tag moved and pushed again) replaces the notes of a draft that has that line, or no notes at
+   all. Notes without the line are yours: the job leaves
    them alone, and warns if they differ from the changelog's. It only ever changes a draft:
    if the release is already published, the job fails and leaves the release's files alone, and
    if the draft gets published while the job is attaching its files, the job fails loudly too.
@@ -307,8 +313,9 @@ were merged ([Changelog](#changelog)): nothing is written from scratch at releas
    (`gh release create v<version> --draft --prerelease`): the workflow then attaches its files to
    that one. Don't publish the release before the workflow has attached the Windows and Linux files.
 5. Read the notes over and publish the release. It should carry two DMGs, two `-setup.exe`
-   installers, the Windows zip, the Linux AppImage and `.deb`, and both SHA256SUMS files. A fix to the notes belongs in `CHANGELOG.md` too;
-   if you edit the draft's notes by hand instead, delete the marker line so a re-run keeps them.
+   installers, the Windows zip, the Linux AppImage and `.deb`, and both SHA256SUMS files. A fix
+   to the notes belongs in `CHANGELOG.md` too; if you edit the draft's notes by hand instead,
+   delete the marker line so a re-run keeps them.
 
 ## Architecture
 

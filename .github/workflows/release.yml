@@ -124,12 +124,18 @@ jobs:
             dist/Pasta-Lite-*-SHA256SUMS-windows.txt
           if-no-files-found: error
 
+  # Linux: the AppImage and .deb, built, installed and smoke-tested by linux.yml (also run on PRs).
+  # The write permissions are the ceiling for its jobs: only its attest job, on a tag, takes them
+  # (build provenance); the jobs that build and run the packages keep a read-only token.
   linux:
     name: linux packages
     needs: check
     uses: ./.github/workflows/linux.yml
     permissions:
       contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
 
   # On a tag, attach the files to that tag's release, creating it as a draft prerelease if it
   # doesn't exist yet, with the tag's CHANGELOG.md section as its notes (the check job's
