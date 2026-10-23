@@ -10,8 +10,8 @@ open an issue: follow [SECURITY.md](SECURITY.md) instead.
 
 ## Requirements
 
-- **Node.js 22.12 or newer** (Electron's installer needs it; CI runs 22 and 24). `npm run lint`
-  needs 22.13 or newer, because ESLint 10 requires it.
+- **Node.js 22 (22.23.4+), 24 (24.22.1+) or 26 (26.12.1+)** (the October 2026 security releases; Electron's
+  installer and ESLint 10 need 22.13 or newer anyway). CI runs the newest 22 and 24.
 - **git 2.51 or newer.** The app checks this at startup (`src/gitcheck.js`) and refuses to run
   with an older git, because undo relies on `git reflog write`. The tests need it too. Apple's
   bundled git is usually older, so install git with Homebrew or your package manager. On Windows,

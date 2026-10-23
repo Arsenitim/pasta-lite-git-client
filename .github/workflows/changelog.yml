@@ -72,6 +72,9 @@ jobs:
         if: steps.label.outputs.skip != 'true'
         with:
           node-version: 22
+          # The newest patch release of that major, not the runner image's cached one: Node security
+          # fixes ship as patch releases.
+          check-latest: true
 
       # The base is the merge commit's first parent: main as GitHub merged the PR into it (the
       # event's base.sha can be older). The head is the PR's own last commit, and the script reads
@@ -101,6 +104,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          # The newest patch release of that major, not the runner image's cached one: Node security
+          # fixes ship as patch releases.
+          check-latest: true
 
       # The input goes in through the environment, never into the script's text; the script refuses
       # a range that starts with "-".

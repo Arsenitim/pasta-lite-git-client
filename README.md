@@ -77,7 +77,7 @@ your system `git`, so your existing SSH keys, credential helper and git config j
 
 - **git 2.51 or newer**, installed on your system. Pasta Lite checks this at startup and won't run with an older git (undo depends on `git reflog write`). The git that ships with macOS is usually older, so install one with [Homebrew](https://brew.sh) (`brew install git`). The app finds Homebrew's git even when it's started from the Finder or the Dock. On Windows, install [Git for Windows](https://git-scm.com/download/win) (or run `winget install --id Git.Git -e`). The app uses the git on your PATH, or else finds Git for Windows in its usual install folder (under Program Files, or `AppData\Local\Programs` for a per-user install).
 - **macOS 13 or newer**, or **Windows 10 or 11** (x64 or arm64), for the downloadable app.
-- **Node.js 22.12 or newer**, only to run it from source (Electron's installer needs it).
+- **Node.js 22 (22.23.4+), 24 (24.22.1+) or 26 (26.12.1+)** (the October 2026 security releases), only to run it from source.
 - **Platforms:** developed and tested on macOS. Windows support is alpha: the app works in testing on Windows 11 and CI runs the test suite on Windows too (skipping a few tests that can't run there), but it has seen far less real use than on macOS, so expect rough edges and please [report what you find](https://github.com/SilverClash/pasta-lite-git-client/issues). Linux is supported in the code but not yet tested, and there are no builds for it.
 
 ## Download
