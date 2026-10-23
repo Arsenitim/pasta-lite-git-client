@@ -157,9 +157,10 @@
       "category": "Development",
       "icon": "assets/icon.icns",
       "executableName": "pasta-lite",
+      "executableArgs": ["%F"],
       "syncDesktopName": true,
       "artifactName": "Pasta-Lite-${version}-linux-${arch}.${ext}",
-      "maintainer": "Alexey Zhuravlev (https://github.com/SilverClash)"
+      "maintainer": "Alexey Zhuravlev <info@zhuravlev.biz>"
     },
     "deb": {
       "depends": [
